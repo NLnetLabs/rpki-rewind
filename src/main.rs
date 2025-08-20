@@ -1,10 +1,15 @@
+use std::error::Error;
+use std::io;
 use std::{collections::HashMap, fmt::Display};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use futures_util::StreamExt;
+
 use clokwerk::{AsyncScheduler, TimeUnits};
 use daemonbase::logging::Logger;
 use log::{info, warn};
+use tokio::{fs::File, io::AsyncWriteExt};
 use tokio::sync::RwLock;
 
 mod settings;
@@ -38,7 +43,7 @@ impl App {
         loop {
             scheduler.run_pending().await;
             tokio::time::sleep(Duration::from_millis(100)).await;
-            warn!("{:#?}", runners.clone().read().await);
+            // warn!("{:#?}", runners.clone().read().await);
         }
     }
 
@@ -48,7 +53,10 @@ impl App {
                 let mut runners = runners.write().await;
                 for url in &rrdps {
                     if !&runners.contains_key(url) {
-                        let _ = &runners.insert(url.to_string(), Runner::new());
+                        let _ = &runners.insert(
+                            url.to_string(), 
+                            Runner::new(url.to_string())
+                        );
                     }
                 }
                 runners.retain(|k, v: &mut Runner| {
@@ -67,7 +75,7 @@ impl App {
 
     async fn fetch_rrdp_urls() -> Result<Vec<String>, FetchError> {
         let client = reqwest::Client::builder()
-            .user_agent("NLnet Labs RPKI-Rewind")
+            .user_agent(settings::USER_AGENT)
             .build()?;
         let resp = client.get(settings::ROUTINATOR_URL).send().await?;
         let value = resp.json::<serde_json::Value>().await?;
@@ -111,12 +119,14 @@ impl From<reqwest::Error> for FetchError {
 #[derive(Debug)]
 
 struct Runner {
+    url: String,
     stop: Arc<Mutex<bool>>
 }
 
 impl Runner {
-    pub fn new() -> Self {
+    pub fn new(url: String) -> Self {
         let mut runner = Self { 
+            url: url,
             stop: Arc::new(Mutex::new(false))
         };
         runner.start();
@@ -124,9 +134,34 @@ impl Runner {
     }
 
     pub fn start(&mut self) {
+        let client = reqwest::Client::builder()
+            .user_agent(settings::USER_AGENT)
+            .build().expect("reqwest is broken beyond repair");
+        let url = String::from(self.url.as_str());
+
         let mut scheduler = AsyncScheduler::with_tz(chrono::Utc);
-        scheduler.every(settings::UPDATE_NOTIFICATION.seconds()).run(|| async {
-            warn!("THING!");
+        scheduler.every(settings::UPDATE_NOTIFICATION.seconds()).run(move || {
+            let client = client.clone();
+            let url = url.clone();
+            async move {
+                let _ = async || -> Result<(), Box<dyn Error>> {
+                    let response = client.get(&url).send().await?;
+                    let file_path = format!("notifications/{}-{}.xml", chrono::Utc::now().timestamp_millis(), hex::encode(&url));
+                    let mut file = File::create(file_path).await?;
+
+                    let mut stream = response.bytes_stream();
+
+                    while let Some(chunk) = stream.next().await {
+                        let chunk = chunk?;
+                        file.write_all(&chunk).await?;
+                    }
+
+                    file.flush().await?;
+                    Ok(())
+                }().await.map_err(|e| {
+                    warn!("{}", e);
+                });
+            }
         });
 
         let stop: Arc<Mutex<bool>> = self.stop.clone();
@@ -139,7 +174,6 @@ impl Runner {
                     break;
                 }
             }
-            warn!("DONE");
         });
     }
 
