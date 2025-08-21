@@ -9,6 +9,7 @@ use clokwerk::{AsyncScheduler, TimeUnits};
 use daemonbase::logging::Logger;
 use log::{info, warn};
 use reqwest::IntoUrl;
+use rpki::rrdp::NotificationFile;
 use sha2::Digest;
 use tokio::{io::AsyncWriteExt};
 use tokio::sync::RwLock;
@@ -117,11 +118,9 @@ impl From<reqwest::Error> for FetchError {
     }
 }
 
-#[derive(Debug)]
-
 struct Runner {
     url: String,
-    // serial: Arc<Mutex<u32>>,
+    notification: Arc<RwLock<Option<NotificationFile>>>,
     stop: Arc<Mutex<bool>>
 }
 
@@ -129,6 +128,7 @@ impl Runner {
     pub fn new(url: String) -> Self {
         let mut runner = Self { 
             url: url,
+            notification: Arc::new(RwLock::new(None)),
             stop: Arc::new(Mutex::new(false))
         };
         runner.start();
@@ -186,49 +186,82 @@ impl Runner {
             .build().expect("reqwest is broken beyond repair");
         let url = String::from(self.url.as_str());
 
-        let mut scheduler = AsyncScheduler::with_tz(chrono::Utc);
-        scheduler.every(settings::UPDATE_NOTIFICATION.seconds()).run(move || {
-            let client = client.clone();
-            let url = url.clone();
-            let time = chrono::Utc::now().timestamp_millis().to_string();
-            async move {
+        let notification = self.notification.clone();
+        
+        let stop: Arc<Mutex<bool>> = self.stop.clone();
+        tokio::spawn(async move {
+            while !*stop.lock().expect("Stop Mutex read err'd") {
+                let client = client.clone();
+                let url = url.clone();
+                let notification = notification.clone();
+                let now = tokio::time::Instant::now();
+                let time = chrono::Utc::now().timestamp_millis().to_string();
                 let _ = async || -> Result<(), Box<dyn Error>> {
-                    let output = "/tmp/rpki-rewind/".to_string();
+                    let output = settings::DOWNLOAD_FOLDER.to_string();
 
                     Self::download(&client, &time, &url, &output).await?;
 
                     let notification_path = Self::download_path(&time, &output, &url);
                     let notification_path = format!("{}.xml", notification_path);
-                    dbg!(&notification_path);
                     let reader = std::io::BufReader::new(std::fs::File::open(notification_path)?);
-                    let notification_file = rpki::rrdp::NotificationFile::parse(reader);
+                    let mut notification_file = rpki::rrdp::NotificationFile::parse(reader);
 
-                    if let Ok(notification_file) = notification_file {
-                        Self::download(
-                            &client, 
-                            &time,
-                            &notification_file.snapshot().uri().to_string(), 
-                            &output
-                        ).await?;
+                    if let Ok(mut new_notification) = notification_file {
+                        let mut notification = notification.write().await;
+                        let mut download_snapshot = false;
+                        let mut last_serial = 0;
+                        if let Some(notification) = notification.as_mut() {
+                            if notification.session_id() != new_notification.session_id() {
+                                download_snapshot = true;
+                            }
+                            if !notification.sort_and_verify_deltas(None) {
+                                download_snapshot = true;
+                            }
+                            if !new_notification.sort_and_verify_deltas(None) {
+                                download_snapshot = true;
+                            }
+                            if let Some(last) = notification.deltas().last() {
+                                if let Some(new_last) = new_notification.deltas().last() {
+                                    if new_last.serial() < last.serial() {
+                                        download_snapshot = true;
+                                    } else {
+                                        last_serial = last.serial();
+                                    }
+                                }
+                            }
+                        } else {
+                            download_snapshot = true;
+                        };
+                        if download_snapshot {
+                            warn!("SNAPSHOT {}", &new_notification.snapshot().uri().to_string());
+                            Self::download(
+                                &client, 
+                                &time,
+                                &new_notification.snapshot().uri().to_string(), 
+                                &output
+                            ).await?;
+                        } else {
+                            for delta in new_notification.deltas() {
+                                if delta.serial() > last_serial {
+                                    warn!("DELTA {}", &delta.uri().to_string());
+                                    Self::download(
+                                        &client, 
+                                        &time,
+                                        &delta.uri().to_string(), 
+                                        &output
+                                    ).await?;
+                                }
+                            }
+                        }
+                        *notification = Some(new_notification);
                     }
                     Ok(())
                 }().await.map_err(|e| {
                     warn!("{}", e);
                 });
-
-
-            }
-        });
-
-        let stop: Arc<Mutex<bool>> = self.stop.clone();
-        tokio::spawn(async move {
-            loop {
-                if !*stop.lock().expect("Stop Mutex read err'd") {
-                    scheduler.run_pending().await;
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-                } else {
-                    break;
-                }
+                tokio::time::sleep_until(
+                    now + Duration::from_secs(settings::UPDATE_NOTIFICATION.into())
+                ).await;                
             }
         });
     }
