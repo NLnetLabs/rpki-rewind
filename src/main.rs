@@ -1,5 +1,4 @@
 use std::error::Error;
-use std::io;
 use std::{collections::HashMap, fmt::Display};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -9,7 +8,9 @@ use futures_util::StreamExt;
 use clokwerk::{AsyncScheduler, TimeUnits};
 use daemonbase::logging::Logger;
 use log::{info, warn};
-use tokio::{fs::File, io::AsyncWriteExt};
+use reqwest::IntoUrl;
+use sha2::Digest;
+use tokio::{io::AsyncWriteExt};
 use tokio::sync::RwLock;
 
 mod settings;
@@ -120,6 +121,7 @@ impl From<reqwest::Error> for FetchError {
 
 struct Runner {
     url: String,
+    // serial: Arc<Mutex<u32>>,
     stop: Arc<Mutex<bool>>
 }
 
@@ -133,6 +135,51 @@ impl Runner {
         runner
     }
 
+    fn download_path<
+        U: std::convert::AsRef<[u8]>,
+        P: std::fmt::Display + std::convert::AsRef<std::ffi::OsStr>
+    >(time: P, base: P, url: U) -> String {
+        let result = sha2::Sha256::digest(url);
+        let file_path = std::path::Path::new(&base).join(format!("{}-{}",
+            time,
+            hex::encode(result)
+        ));
+        let file_path = file_path.to_str().expect("invalid path");
+        file_path.to_string()
+    }
+
+    async fn download<U: std::convert::AsRef<[u8]>, P: std::fmt::Display + std::convert::AsRef<std::ffi::OsStr>>(
+        client: &reqwest::Client, 
+        time: &P,
+        url: &U,
+        output: &P
+    ) -> Result<(), Box<dyn Error>> where for<'a> &'a U: IntoUrl {
+        let file_path = Self::download_path(time, output, url);
+        let response = client.get(url).send().await?;
+        let mut headers = HashMap::new();
+        for (k, v) in response.headers() {
+            if let Ok(v) = v.to_str() {
+                headers.insert(k.to_string(), v.to_string());
+            }
+        }
+        tokio::fs::write(
+            format!("{}.headers.json", file_path),
+            serde_json::to_string(&headers)?
+        ).await?;
+
+        let mut file = tokio::fs::File::create(format!("{}.xml", file_path)).await?;
+
+        let mut stream = response.bytes_stream();
+
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            file.write_all(&chunk).await?;
+        }
+
+        file.flush().await?;
+        Ok(())
+    }
+
     pub fn start(&mut self) {
         let client = reqwest::Client::builder()
             .user_agent(settings::USER_AGENT)
@@ -143,24 +190,33 @@ impl Runner {
         scheduler.every(settings::UPDATE_NOTIFICATION.seconds()).run(move || {
             let client = client.clone();
             let url = url.clone();
+            let time = chrono::Utc::now().timestamp_millis().to_string();
             async move {
                 let _ = async || -> Result<(), Box<dyn Error>> {
-                    let response = client.get(&url).send().await?;
-                    let file_path = format!("notifications/{}-{}.xml", chrono::Utc::now().timestamp_millis(), hex::encode(&url));
-                    let mut file = File::create(file_path).await?;
+                    let output = "/tmp/rpki-rewind/".to_string();
 
-                    let mut stream = response.bytes_stream();
+                    Self::download(&client, &time, &url, &output).await?;
 
-                    while let Some(chunk) = stream.next().await {
-                        let chunk = chunk?;
-                        file.write_all(&chunk).await?;
+                    let notification_path = Self::download_path(&time, &output, &url);
+                    let notification_path = format!("{}.xml", notification_path);
+                    dbg!(&notification_path);
+                    let reader = std::io::BufReader::new(std::fs::File::open(notification_path)?);
+                    let notification_file = rpki::rrdp::NotificationFile::parse(reader);
+
+                    if let Ok(notification_file) = notification_file {
+                        Self::download(
+                            &client, 
+                            &time,
+                            &notification_file.snapshot().uri().to_string(), 
+                            &output
+                        ).await?;
                     }
-
-                    file.flush().await?;
                     Ok(())
                 }().await.map_err(|e| {
                     warn!("{}", e);
                 });
+
+
             }
         });
 
