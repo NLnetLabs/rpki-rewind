@@ -8,3 +8,13 @@ CREATE TABLE events (
     PRIMARY KEY(id)
 );
 
+CREATE TABLE objects (
+    id SERIAL NOT NULL,
+    content BYTEA NOT NULL, 
+    visible_on BIGINT, 
+    disappeared_on BIGINT, 
+    hash TEXT, 
+    uri TEXT, 
+    publication_point TEXT,
+    PRIMARY KEY(id)
+)

@@ -9,6 +9,7 @@ use clokwerk::{AsyncScheduler, TimeUnits};
 use daemonbase::logging::Logger;
 use log::{info, warn, error};
 use reqwest::IntoUrl;
+use rpki::repository::Roa;
 use rpki::rrdp::{NotificationFile, Snapshot};
 use sha2::Digest;
 use tokio::{io::AsyncWriteExt};
@@ -67,7 +68,7 @@ impl App {
                     if !&runners.contains_key(url) {
                         let _ = &runners.insert(
                             url.to_string(), 
-                            Runner::new(url.to_string())
+                            Runner::new(database.clone(), url.to_string())
                         );
                     }
                 }
@@ -142,15 +143,17 @@ impl From<reqwest::Error> for FetchError {
 }
 
 struct Runner {
+    database: Arc<Database>,
     url: String,
     notification: Arc<RwLock<Option<NotificationFile>>>,
     stop: Arc<Mutex<bool>>
 }
 
 impl Runner {
-    pub fn new(url: String) -> Self {
+    pub fn new(database: Arc<Database>, url: String) -> Self {
         let mut runner = Self { 
-            url: url,
+            database,
+            url,
             notification: Arc::new(RwLock::new(None)),
             stop: Arc::new(Mutex::new(false))
         };
@@ -208,23 +211,25 @@ impl Runner {
             .user_agent(settings::USER_AGENT)
             .build().expect("reqwest is broken beyond repair");
         let url = String::from(self.url.as_str());
-
+        let database = self.database.clone();
         let notification = self.notification.clone();
         
         let stop: Arc<Mutex<bool>> = self.stop.clone();
         tokio::spawn(async move {
             while !*stop.lock().expect("Stop Mutex read err'd") {
+                let database = database.clone();
                 let client = client.clone();
                 let url = url.clone();
+                let database = database.clone();
                 let notification = notification.clone();
                 let now = tokio::time::Instant::now();
-                let time = chrono::Utc::now().timestamp_millis().to_string();
+                let time = chrono::Utc::now().timestamp_millis();
                 let _ = async || -> Result<(), Box<dyn Error>> {
                     let output = settings::DOWNLOAD_FOLDER.to_string();
 
-                    Self::download(&client, &time, &url, &output).await?;
+                    Self::download(&client, &time.to_string(), &url, &output).await?;
 
-                    let notification_path = Self::download_path(&time, &output, &url);
+                    let notification_path = Self::download_path(&time.to_string(), &output, &url);
                     let notification_path = format!("{}.xml", notification_path);
                     let reader = std::io::BufReader::new(std::fs::File::open(notification_path)?);
                     let mut notification_file = rpki::rrdp::NotificationFile::parse(reader);
@@ -257,31 +262,56 @@ impl Runner {
                         };
                         if download_snapshot {
                             warn!("SNAPSHOT {}", &new_notification.snapshot().uri().to_string());
+                            database.add_event(
+                                "snapshot", 
+                                time, 
+                                Some(new_notification.snapshot().uri().as_str()), 
+                                Some(new_notification.snapshot().hash().to_string().as_str()), 
+                                Some(&url)
+                            ).await?;
                             Self::download(
                                 &client, 
-                                &time,
+                                &time.to_string(),
                                 &new_notification.snapshot().uri().to_string(), 
                                 &output
                             ).await?;
 
-                            let snapshot_path = Self::download_path(&time, &output, &url);
+                            let snapshot_path = Self::download_path(&time.to_string(), &output, &new_notification.snapshot().uri().as_str());
                             let snapshot_path = format!("{}.xml", snapshot_path);
                             let reader = std::io::BufReader::new(std::fs::File::open(snapshot_path)?);
                             let snapshot = Snapshot::parse(reader);
 
                             if let Ok(snapshot) = snapshot {
+                                let mut transaction = database.begin_transaction().await?;
                                 for element in snapshot.elements() {
-                                    
+                                    if let Err(err) = database.add_object(
+                                        element.data(),
+                                         time, 
+                                         Some(&element.uri().to_string()), 
+                                         None, 
+                                         Some(&url), 
+                                         &mut transaction
+                                    ).await {
+                                        warn!("Could not add object to database: {}", err);
+                                    }
                                 }
+                                database.commit(transaction).await;
                             }
 
                         } else {
                             for delta in new_notification.deltas() {
                                 if delta.serial() > last_serial {
                                     warn!("DELTA {}", &delta.uri().to_string());
+                                    database.add_event(
+                                        "delta", 
+                                        time, 
+                                        Some(delta.uri().as_str()), 
+                                        Some(delta.hash().to_string().as_str()), 
+                                        Some(&url)
+                                    ).await?;
                                     Self::download(
                                         &client, 
-                                        &time,
+                                        &time.to_string(),
                                         &delta.uri().to_string(), 
                                         &output
                                     ).await?;
