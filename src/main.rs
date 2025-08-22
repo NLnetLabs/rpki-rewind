@@ -7,14 +7,18 @@ use futures_util::StreamExt;
 
 use clokwerk::{AsyncScheduler, TimeUnits};
 use daemonbase::logging::Logger;
-use log::{info, warn};
+use log::{info, warn, error};
 use reqwest::IntoUrl;
-use rpki::rrdp::NotificationFile;
+use rpki::rrdp::{NotificationFile, Snapshot};
 use sha2::Digest;
 use tokio::{io::AsyncWriteExt};
 use tokio::sync::RwLock;
 
+use crate::database::Database;
+
+mod database;
 mod settings;
+mod utils;
 
 
 #[tokio::main]
@@ -35,12 +39,18 @@ impl App {
     pub async fn main(&self) {
         Logger::init_logging();
 
+        let database = Arc::new(Database::new().await);
+        if let Err(err) = database.add_startup().await {
+            error!("{}", err);
+        };
+
         let mut scheduler = AsyncScheduler::with_tz(chrono::Utc);
         let runners = Arc::new(RwLock::new(HashMap::new()));
         let rn = runners.clone();
-        scheduler.every(settings::UPDATE_RRDP.seconds()).run(move || Self::update_runners(rn.to_owned()));
+        let db = database.clone();
+        scheduler.every(settings::UPDATE_RRDP.seconds()).run(move || Self::update_runners(db.to_owned(), rn.to_owned()));
 
-        Self::update_runners(runners.clone()).await;
+        Self::update_runners(database.clone(), runners.clone()).await;
 
         loop {
             scheduler.run_pending().await;
@@ -49,7 +59,7 @@ impl App {
         }
     }
 
-    async fn update_runners(runners: Arc<RwLock<HashMap<String, Runner>>>) {
+    async fn update_runners(database: Arc<Database>, runners: Arc<RwLock<HashMap<String, Runner>>>) {
         match Self::fetch_rrdp_urls().await {
             Ok(rrdps) => {
                 let mut runners = runners.write().await;
@@ -63,6 +73,19 @@ impl App {
                 }
                 runners.retain(|k, v: &mut Runner| {
                     if !rrdps.contains(k) {
+                        let k = k.clone();
+                        let database = database.clone();
+                        tokio::spawn(async move {
+                            if let Err(err) = database.add_event(
+                                "removed", 
+                                utils::timestamp(), 
+                                None, 
+                                None, 
+                                Some(&k)
+                            ).await {
+                                warn!("Could not add remove event to database: {}", err);
+                            };
+                        });
                         v.stop();
                         return false;
                     }
@@ -240,6 +263,18 @@ impl Runner {
                                 &new_notification.snapshot().uri().to_string(), 
                                 &output
                             ).await?;
+
+                            let snapshot_path = Self::download_path(&time, &output, &url);
+                            let snapshot_path = format!("{}.xml", snapshot_path);
+                            let reader = std::io::BufReader::new(std::fs::File::open(snapshot_path)?);
+                            let snapshot = Snapshot::parse(reader);
+
+                            if let Ok(snapshot) = snapshot {
+                                for element in snapshot.elements() {
+                                    
+                                }
+                            }
+
                         } else {
                             for delta in new_notification.deltas() {
                                 if delta.serial() > last_serial {
