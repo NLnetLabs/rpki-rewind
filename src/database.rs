@@ -1,10 +1,9 @@
-use std::{pin::Pin, sync::Arc};
+use std::pin::Pin;
 
 use futures_util::Stream;
-use rpki::uri;
-use sqlx::{postgres::PgRow, Pool, Postgres, Transaction};
+use sqlx::{Pool, Postgres, Transaction};
 
-use crate::{settings, utils};
+use crate::settings;
 
 
 
@@ -97,9 +96,20 @@ impl Database {
         Ok(())
     }
 
-    pub async fn retrieve_objects(&self, timestamp: i64) -> Pin<Box<dyn Stream<Item = Result<PgRow, sqlx::Error>> + std::marker::Send>> {
-        sqlx::query("SELECT * FROM objects WHERE visible_on <= $1 AND (disappeared_on >= $1 OR disappeared_on IS NULL)")
+    pub async fn retrieve_objects(&self, timestamp: i64) -> Pin<Box<dyn Stream<Item = Result<Object, sqlx::Error>> + std::marker::Send + '_>> {
+        sqlx::query_as("SELECT * FROM objects WHERE visible_on <= $1 AND (disappeared_on >= $1 OR disappeared_on IS NULL)")
             .bind(timestamp)
             .fetch(&self.pool)
     }
+}
+
+#[derive(sqlx::FromRow, Debug, PartialEq, Eq)]
+pub struct Object {
+    pub id: i32,
+    pub content: Vec<u8>,
+    pub visible_on: i64,
+    pub disappeared_on: Option<i64>,
+    pub hash: String,
+    pub uri: String,
+    pub publication_point: String,
 }
