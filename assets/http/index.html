@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>RPKI Wayback Machine 2.0</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-T3c6CoIi6uLrA9TneNEoa7RxnatzjcDSCmG1MXxSR1GAsXEV/Dwwykc2MPK8M2HN" crossorigin="anonymous">
+    <style>
+      .container {
+        max-width: 950px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container my-5">
+      <h1>RPKI Wayback Machine 2.0</h1>
+      <div class="px-0">
+        <p class="fs-5"></p>
+        <p>
+          The main idea of this database is that you can request the state of the RPKI at any random point in time and recreate it locally in a form that can be parsed by a relying party client (e.g. Routinator). Data is fetched at a 2-minute interval.
+        </p>
+        <p>
+          <strong>Generating the zip file might take a couple of minutes. The page may seem unresponsive but things are actually happening.</strong>
+        </p>
+        <p>
+          <form action="obtain" method="GET">
+            Select a time (UTC):
+            <input type="datetime-local" name="timestamp">
+            <input type="submit">
+          </form>
+        </p>
+        <hr class="col-1 my-4">
+
+        <p>
+          <i>Much like the web 2.0, RPKI Wayback Machine 2.0 is an improvement over 1.0, and will go downhill again at 3.0.</i>
+        </p>
+        <p>
+          <a href="https://nlnetlabs.nl">NLnet Labs</a> -  <a href="https://github.com/NLnetLabs/rpki-rewind">GitHub project</a>
+        </p>
+      </div>
+    </div>
+  </body>
+</html>
