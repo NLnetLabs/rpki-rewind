@@ -1,7 +1,8 @@
-use std::sync::Arc;
+use std::{pin::Pin, sync::Arc};
 
+use futures_util::Stream;
 use rpki::uri;
-use sqlx::{Pool, Postgres, Transaction};
+use sqlx::{postgres::PgRow, Pool, Postgres, Transaction};
 
 use crate::{settings, utils};
 
@@ -36,8 +37,9 @@ impl Database {
         transaction.commit().await
     }
 
-    pub async fn add_startup(&self) -> Result<(), sqlx::Error> {
-        self.add_event("startup", utils::timestamp(), None, None, None).await
+    pub async fn add_startup(&self, timestamp: i64) -> Result<(), sqlx::Error> {
+        self.add_event("startup", timestamp, None, None, None).await?;
+        self.remove_objects_all(timestamp).await
     }
 
     pub async fn add_event(&self, event: &str, timestamp: i64, uri: Option<&str>, hash: Option<&str>, publication_point: Option<&str>) -> Result<(), sqlx::Error> {
@@ -51,7 +53,8 @@ impl Database {
         Ok(())
     }
 
-    pub async fn add_object(&self, content: &[u8], visible_on: i64, uri: Option<&str>, hash: Option<&str>, publication_point: Option<&str>, transaction: &mut Transaction<'_, Postgres>) -> Result<(), sqlx::Error> {
+    pub async fn add_object(&self, content: &[u8], visible_on: i64, uri: &str, hash: Option<&str>, publication_point: Option<&str>, transaction: &mut Transaction<'_, Postgres>) -> Result<(), sqlx::Error> {
+        self.remove_objects_uri(uri, visible_on, transaction).await?;
         sqlx::query("INSERT INTO objects (content, visible_on, hash, uri, publication_point) VALUES ($1, $2, $3, $4, $5)")
             .bind(content)
             .bind(visible_on)
@@ -60,5 +63,43 @@ impl Database {
             .bind(publication_point)
             .execute(&mut **transaction).await?;
         Ok(())
+    }
+
+    pub async fn remove_objects_all(&self, disappeared_on: i64) -> Result<(), sqlx::Error> {
+        sqlx::query("UPDATE objects SET disappeared_on = $1 WHERE disappeared_on IS NULL")
+            .bind(disappeared_on)
+            .execute(&self.pool).await?;
+        Ok(())
+    }
+
+    pub async fn remove_objects_publication_point(&self, publication_point: &str, disappeared_on: i64) -> Result<(), sqlx::Error> {
+        sqlx::query("UPDATE objects SET disappeared_on = $1 WHERE publication_point = $2 AND disappeared_on IS NULL")
+            .bind(disappeared_on)
+            .bind(publication_point)
+            .execute(&self.pool).await?;
+        Ok(())
+    }
+
+    pub async fn remove_objects_uri(&self, uri: &str, disappeared_on: i64, transaction: &mut Transaction<'_, Postgres>) -> Result<(), sqlx::Error> {
+        sqlx::query("UPDATE objects SET disappeared_on = $1 WHERE uri = $2 AND disappeared_on IS NULL")
+            .bind(disappeared_on)
+            .bind(uri)
+            .execute(&mut **transaction).await?;
+        Ok(())
+    }
+
+    pub async fn remove_objects_uri_hash(&self, uri: &str, hash: &str, disappeared_on: i64, transaction: &mut Transaction<'_, Postgres>) -> Result<(), sqlx::Error> {
+        sqlx::query("UPDATE objects SET disappeared_on = $1 WHERE uri = $2 AND hash = $3 AND disappeared_on IS NULL")
+            .bind(disappeared_on)
+            .bind(uri)
+            .bind(hash)
+            .execute(&mut **transaction).await?;
+        Ok(())
+    }
+
+    pub async fn retrieve_objects(&self, timestamp: i64) -> Pin<Box<dyn Stream<Item = Result<PgRow, sqlx::Error>> + std::marker::Send>> {
+        sqlx::query("SELECT * FROM objects WHERE visible_on <= $1 AND (disappeared_on >= $1 OR disappeared_on IS NULL)")
+            .bind(timestamp)
+            .fetch(&self.pool)
     }
 }

@@ -18,3 +18,8 @@ CREATE TABLE objects (
     publication_point TEXT,
     PRIMARY KEY(id)
 )
+
+CREATE INDEX IF NOT EXISTS idx_objects_uri ON objects (uri);
+CREATE INDEX IF NOT EXISTS idx_objects_publication_point ON objects (publication_point);
+CREATE INDEX IF NOT EXISTS idx_objects_visible_on ON objects (visible_on);
+CREATE INDEX IF NOT EXISTS idx_objects_disappeared_on ON objects (disappeared_on);

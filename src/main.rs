@@ -1,4 +1,5 @@
 use std::error::Error;
+use std::hash::Hash;
 use std::{collections::HashMap, fmt::Display};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -10,7 +11,7 @@ use daemonbase::logging::Logger;
 use log::{info, warn, error};
 use reqwest::IntoUrl;
 use rpki::repository::Roa;
-use rpki::rrdp::{NotificationFile, Snapshot};
+use rpki::rrdp::{Delta, NotificationFile, Snapshot};
 use sha2::Digest;
 use tokio::{io::AsyncWriteExt};
 use tokio::sync::RwLock;
@@ -41,7 +42,7 @@ impl App {
         Logger::init_logging();
 
         let database = Arc::new(Database::new().await);
-        if let Err(err) = database.add_startup().await {
+        if let Err(err) = database.add_startup(utils::timestamp()).await {
             error!("{}", err);
         };
 
@@ -262,6 +263,12 @@ impl Runner {
                         };
                         if download_snapshot {
                             warn!("SNAPSHOT {}", &new_notification.snapshot().uri().to_string());
+                            Self::download(
+                                &client, 
+                                &time.to_string(),
+                                &new_notification.snapshot().uri().to_string(), 
+                                &output
+                            ).await?;
                             database.add_event(
                                 "snapshot", 
                                 time, 
@@ -269,12 +276,7 @@ impl Runner {
                                 Some(new_notification.snapshot().hash().to_string().as_str()), 
                                 Some(&url)
                             ).await?;
-                            Self::download(
-                                &client, 
-                                &time.to_string(),
-                                &new_notification.snapshot().uri().to_string(), 
-                                &output
-                            ).await?;
+                            database.remove_objects_publication_point(&url, time).await?;
 
                             let snapshot_path = Self::download_path(&time.to_string(), &output, &new_notification.snapshot().uri().as_str());
                             let snapshot_path = format!("{}.xml", snapshot_path);
@@ -284,11 +286,15 @@ impl Runner {
                             if let Ok(snapshot) = snapshot {
                                 let mut transaction = database.begin_transaction().await?;
                                 for element in snapshot.elements() {
+                                    let mut sha256 = sha2::Sha256::new();
+                                    sha256.update(element.data());
+                                    let hash = hex::encode(sha256.finalize());
+
                                     if let Err(err) = database.add_object(
                                         element.data(),
                                          time, 
-                                         Some(&element.uri().to_string()), 
-                                         None, 
+                                         &element.uri().to_string(), 
+                                         Some(hash.as_str()), 
                                          Some(&url), 
                                          &mut transaction
                                     ).await {
@@ -297,11 +303,17 @@ impl Runner {
                                 }
                                 database.commit(transaction).await;
                             }
-
                         } else {
+                            let mut transaction = database.begin_transaction().await?;
                             for delta in new_notification.deltas() {
                                 if delta.serial() > last_serial {
                                     warn!("DELTA {}", &delta.uri().to_string());
+                                    Self::download(
+                                        &client, 
+                                        &time.to_string(),
+                                        &delta.uri().to_string(), 
+                                        &output
+                                    ).await?;
                                     database.add_event(
                                         "delta", 
                                         time, 
@@ -309,13 +321,57 @@ impl Runner {
                                         Some(delta.hash().to_string().as_str()), 
                                         Some(&url)
                                     ).await?;
-                                    Self::download(
-                                        &client, 
-                                        &time.to_string(),
-                                        &delta.uri().to_string(), 
-                                        &output
-                                    ).await?;
+                                    let delta_path = Self::download_path(&time.to_string(), &output, &delta.uri().as_str());
+                                    let delta_path = format!("{}.xml", delta_path);
+                                    let reader = std::io::BufReader::new(std::fs::File::open(delta_path)?);
+                                    let delta_file = Delta::parse(reader);
+
+                                    if let Ok(delta_file) = delta_file {
+                                        for element in delta_file.elements() {
+                                            match element {
+                                                rpki::rrdp::DeltaElement::Publish(publish_element) => {
+                                                    let mut sha256 = sha2::Sha256::new();
+                                                    sha256.update(publish_element.data());
+                                                    let hash = hex::encode(sha256.finalize());
+
+                                                    database.add_object(
+                                                        publish_element.data(), 
+                                                        time, 
+                                                        publish_element.uri().as_str(), 
+                                                        Some(hash.as_str()), 
+                                                        Some(&url), 
+                                                        &mut transaction
+                                                    ).await?;
+                                                },
+                                                rpki::rrdp::DeltaElement::Update(update_element) => {
+                                                    let mut sha256 = sha2::Sha256::new();
+                                                    sha256.update(update_element.data());
+                                                    let hash = hex::encode(sha256.finalize());
+
+                                                    database.add_object(
+                                                        update_element.data(), 
+                                                        time, 
+                                                        update_element.uri().as_str(), 
+                                                        Some(hash.as_str()), 
+                                                        Some(&url), 
+                                                        &mut transaction
+                                                    ).await?;
+                                                },
+                                                rpki::rrdp::DeltaElement::Withdraw(withdraw_element) => {
+                                                    database.remove_objects_uri_hash(
+                                                        withdraw_element.uri().as_str(), 
+                                                        hex::encode(withdraw_element.hash().as_slice()).as_str(),
+                                                        time, 
+                                                        &mut transaction
+                                                    ).await?;
+                                                },
+                                            }
+                                        }
+                                    }
                                 }
+                            }
+                            if let Err(err) = database.commit(transaction).await {
+                                error!("Could not commit: {}", err);
                             }
                         }
                         *notification = Some(new_notification);
@@ -345,5 +401,10 @@ mod tests {
     async fn test_fetch_rrdp_urls() {
         let urls = crate::App::fetch_rrdp_urls().await.unwrap();
         dbg!(urls);
+    }
+
+    #[tokio::test]
+    async fn retrieve_files() {
+        
     }
 }
