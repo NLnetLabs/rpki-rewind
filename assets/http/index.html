@@ -17,7 +17,7 @@
       <div class="px-0">
         <p class="fs-5"></p>
         <p>
-          The main idea of this database is that you can request the state of the RPKI at any random point in time and recreate it locally in a form that can be parsed by a relying party client (e.g. Routinator). Data is fetched at a 2-minute interval.
+          The main idea of this database is that you can request the state of the RPKI at any random point in time and recreate it locally in a form that can be parsed by a relying party client (e.g. Routinator). Data is fetched at a 1-minute interval.
         </p>
         <p>
           <strong>Generating the zip file might take a couple of minutes. The page may seem unresponsive but things are actually happening.</strong>
@@ -26,7 +26,7 @@
           <form action="obtain" method="GET">
             Select a time (UTC):
             <input type="datetime-local" name="timestamp">
-            <input type="submit">
+            <input type="submit" value="Give me the data">
           </form>
         </p>
         <hr class="col-1 my-4">

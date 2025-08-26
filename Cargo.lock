@@ -1626,6 +1626,7 @@ dependencies = [
  "log",
  "reqwest",
  "rpki",
+ "serde",
  "serde_json",
  "sha2",
  "sqlx",

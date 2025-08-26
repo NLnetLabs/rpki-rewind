@@ -10,6 +10,7 @@ use daemonbase::logging::Logger;
 use log::{info, warn, error};
 use reqwest::IntoUrl;
 use rpki::rrdp::{Delta, NotificationFile, Snapshot};
+use rpki_rewind::objects::{RoaObject, RpkiObject};
 use rpki_rewind::{settings, utils};
 use sha2::Digest;
 use tokio::{io::AsyncWriteExt};
@@ -71,6 +72,7 @@ impl App {
                 }
                 runners.retain(|k, v: &mut Runner| {
                     if !rrdps.contains(k) {
+                        v.stop();
                         let k = k.clone();
                         let database = database.clone();
                         tokio::spawn(async move {
@@ -83,8 +85,13 @@ impl App {
                             ).await {
                                 warn!("Could not add remove event to database: {}", err);
                             };
+                            if let Err(err) = database.remove_objects_publication_point(
+                                &k, 
+                            utils::timestamp()
+                            ).await {
+                                warn!("Could not remove objects from database: {}", err);
+                            }
                         });
-                        v.stop();
                         return false;
                     }
                     true
@@ -286,6 +293,22 @@ impl Runner {
                                     sha256.update(element.data());
                                     let hash = hex::encode(sha256.finalize());
 
+                                    let uri: &rpki::uri::Rsync = element.uri();
+                                    let data: Option<String> = match uri {
+                                        _ if uri.ends_with(".roa") => {  
+                                            let roa = rpki::repository::roa::Roa::decode(element.data().clone(), true);
+                                            if let Ok(roa) = roa {
+                                                match serde_json::to_string(&roa) {
+                                                    Ok(x) => Some(x),
+                                                    Err(_) => None
+                                                }
+                                            } else {
+                                                None
+                                            }
+                                        },
+                                        _ => None
+                                    };
+
                                     if let Err(err) = database.add_object(
                                         element.data(),
                                          time, 
@@ -297,7 +320,9 @@ impl Runner {
                                         warn!("Could not add object to database: {}", err);
                                     }
                                 }
-                                database.commit(transaction).await;
+                                if let Err(err) = database.commit(transaction).await {
+                                    warn!("Could not commit database transaction: {}", err);
+                                }
                             }
                         } else {
                             let mut transaction = database.begin_transaction().await?;
