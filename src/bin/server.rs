@@ -294,13 +294,14 @@ impl Runner {
                                     let hash = hex::encode(sha256.finalize());
 
                                     let uri: &rpki::uri::Rsync = element.uri();
-                                    let data: Option<String> = match uri {
+                                    let data: Option<serde_json::Value> = match uri {
                                         _ if uri.ends_with(".roa") => {  
                                             let roa = rpki::repository::roa::Roa::decode(element.data().clone(), true);
                                             if let Ok(roa) = roa {
-                                                match serde_json::to_string(&roa) {
-                                                    Ok(x) => Some(x),
-                                                    Err(_) => None
+                                                let roa_object = RoaObject::from(roa);
+                                                match serde_json::to_value(&roa_object) {
+                                                    Ok(json) => Some(json),
+                                                    Err(_) => None,
                                                 }
                                             } else {
                                                 None
@@ -311,6 +312,7 @@ impl Runner {
 
                                     if let Err(err) = database.add_object(
                                         element.data(),
+                                        data,
                                          time, 
                                          &element.uri().to_string(), 
                                          Some(hash.as_str()), 
@@ -357,6 +359,7 @@ impl Runner {
 
                                                     database.add_object(
                                                         publish_element.data(), 
+                                                        None,
                                                         time, 
                                                         publish_element.uri().as_str(), 
                                                         Some(hash.as_str()), 
@@ -371,6 +374,7 @@ impl Runner {
 
                                                     database.add_object(
                                                         update_element.data(), 
+                                                        None,
                                                         time, 
                                                         update_element.uri().as_str(), 
                                                         Some(hash.as_str()), 

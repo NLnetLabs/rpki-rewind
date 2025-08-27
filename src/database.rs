@@ -1,7 +1,8 @@
 use std::pin::Pin;
 
 use futures_util::Stream;
-use sqlx::{Pool, Postgres, Transaction};
+use serde_json::Value;
+use sqlx::{types::Json, Pool, Postgres, Transaction};
 
 use crate::settings;
 
@@ -52,10 +53,11 @@ impl Database {
         Ok(())
     }
 
-    pub async fn add_object(&self, content: &[u8], visible_on: i64, uri: &str, hash: Option<&str>, publication_point: Option<&str>, transaction: &mut Transaction<'_, Postgres>) -> Result<(), sqlx::Error> {
+    pub async fn add_object(&self, content: &[u8], content_json: Option<Value>, visible_on: i64, uri: &str, hash: Option<&str>, publication_point: Option<&str>, transaction: &mut Transaction<'_, Postgres>) -> Result<(), sqlx::Error> {
         self.remove_objects_uri(uri, visible_on, transaction).await?;
-        sqlx::query("INSERT INTO objects (content, visible_on, hash, uri, publication_point) VALUES ($1, $2, $3, $4, $5)")
+        sqlx::query("INSERT INTO objects (content, content_json, visible_on, hash, uri, publication_point) VALUES ($1, $2, $3, $4, $5, $6)")
             .bind(content)
+            .bind(content_json)
             .bind(visible_on)
             .bind(hash)
             .bind(uri)
@@ -107,6 +109,7 @@ impl Database {
 pub struct Object {
     pub id: i32,
     pub content: Vec<u8>,
+    pub content_json: Option<String>,
     pub visible_on: i64,
     pub disappeared_on: Option<i64>,
     pub hash: String,

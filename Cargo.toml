@@ -17,11 +17,11 @@ hyper = { version = "1.7.0", features = ["full"] }
 hyper-util = { version = "0.1.16", features = ["full"] }
 log = "0.4.27"
 reqwest = { version = "0.12.23", features = ["json", "stream"] }
-rpki = { version = "0.18.6", features = ["repository", "rrdp", "serde-support"] }
+rpki = { version = "0.18.6", features = ["repository", "rrdp", "serde-support"]}
 serde = "1.0.219"
 serde_json = "1.0.142"
 sha2 = "0.10.9"
-sqlx = { version = "0.8", features = [ "runtime-tokio", "tls-native-tls", "postgres" ] }
+sqlx = { version = "0.8", features = ["runtime-tokio", "tls-native-tls", "postgres", "json"] }
 tar = "0.4.44"
 tempfile = "3.21.0"
 tokio = { version = "1.47.1", features = ["rt", "macros", "rt-multi-thread", "fs"] }
