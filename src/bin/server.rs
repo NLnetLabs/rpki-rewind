@@ -10,7 +10,6 @@ use daemonbase::logging::Logger;
 use log::{info, warn, error};
 use reqwest::IntoUrl;
 use rpki::rrdp::{Delta, NotificationFile, Snapshot};
-use rpki_rewind::objects::{RoaObject, RpkiObject};
 use rpki_rewind::{settings, utils};
 use sha2::Digest;
 use tokio::{io::AsyncWriteExt};
@@ -289,26 +288,9 @@ impl Runner {
                             if let Ok(snapshot) = snapshot {
                                 let mut transaction = database.begin_transaction().await?;
                                 for element in snapshot.elements() {
-                                    let mut sha256 = sha2::Sha256::new();
-                                    sha256.update(element.data());
-                                    let hash = hex::encode(sha256.finalize());
+                                    let hash = utils::sha256(element.data());
 
-                                    let uri: &rpki::uri::Rsync = element.uri();
-                                    let data: Option<serde_json::Value> = match uri {
-                                        _ if uri.ends_with(".roa") => {  
-                                            let roa = rpki::repository::roa::Roa::decode(element.data().clone(), true);
-                                            if let Ok(roa) = roa {
-                                                let roa_object = RoaObject::from(roa);
-                                                match serde_json::to_value(&roa_object) {
-                                                    Ok(json) => Some(json),
-                                                    Err(_) => None,
-                                                }
-                                            } else {
-                                                None
-                                            }
-                                        },
-                                        _ => None
-                                    };
+                                    let data: Option<serde_json::Value> = utils::parse_rpki_object(element.uri(), element.data());
 
                                     if let Err(err) = database.add_object(
                                         element.data(),
@@ -353,13 +335,12 @@ impl Runner {
                                         for element in delta_file.elements() {
                                             match element {
                                                 rpki::rrdp::DeltaElement::Publish(publish_element) => {
-                                                    let mut sha256 = sha2::Sha256::new();
-                                                    sha256.update(publish_element.data());
-                                                    let hash = hex::encode(sha256.finalize());
+                                                    let hash = utils::sha256(publish_element.data());
+                                                    let data: Option<serde_json::Value> = utils::parse_rpki_object(publish_element.uri(), publish_element.data());
 
                                                     database.add_object(
                                                         publish_element.data(), 
-                                                        None,
+                                                        data,
                                                         time, 
                                                         publish_element.uri().as_str(), 
                                                         Some(hash.as_str()), 
@@ -368,13 +349,12 @@ impl Runner {
                                                     ).await?;
                                                 },
                                                 rpki::rrdp::DeltaElement::Update(update_element) => {
-                                                    let mut sha256 = sha2::Sha256::new();
-                                                    sha256.update(update_element.data());
-                                                    let hash = hex::encode(sha256.finalize());
+                                                    let hash = utils::sha256(update_element.data());
+                                                    let data: Option<serde_json::Value> = utils::parse_rpki_object(update_element.uri(), update_element.data());
 
                                                     database.add_object(
                                                         update_element.data(), 
-                                                        None,
+                                                        data,
                                                         time, 
                                                         update_element.uri().as_str(), 
                                                         Some(hash.as_str()), 
