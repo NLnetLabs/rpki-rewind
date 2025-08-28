@@ -46,7 +46,8 @@ impl App {
         let runners = Arc::new(RwLock::new(HashMap::new()));
         let rn = runners.clone();
         let db = database.clone();
-        scheduler.every(settings::UPDATE_RRDP.seconds()).run(move || Self::update_runners(db.to_owned(), rn.to_owned()));
+        scheduler.every(settings::UPDATE_RRDP.seconds())
+            .run(move || Self::update_runners(db.to_owned(), rn.to_owned()));
 
         Self::update_runners(database.clone(), runners.clone()).await;
 
@@ -354,9 +355,14 @@ impl Runner {
                         Some(delta.hash().to_string().as_str()), 
                         Some(&url)
                     ).await?;
-                    let delta_path = Self::download_path(&time.to_string(), &output, &delta.uri().as_str());
+                    let delta_path = Self::download_path(
+                        &time.to_string(), 
+                        &output, 
+                        &delta.uri().as_str()
+                    );
                     let delta_path = format!("{}.xml", delta_path);
-                    let reader = std::io::BufReader::new(std::fs::File::open(delta_path)?);
+                    let reader = std::io::BufReader::new(
+                        std::fs::File::open(delta_path)?);
                     let delta_file = Delta::parse(reader);
 
                     if let Ok(delta_file) = delta_file {
@@ -364,7 +370,10 @@ impl Runner {
                             match element {
                                 rpki::rrdp::DeltaElement::Publish(publish_element) => {
                                     let hash = utils::sha256(publish_element.data());
-                                    let data: Option<serde_json::Value> = utils::parse_rpki_object(publish_element.uri(), publish_element.data());
+                                    let data = utils::parse_rpki_object(
+                                            publish_element.uri(), 
+                                            publish_element.data()
+                                        );
 
                                     database.add_object(
                                         publish_element.data(), 
@@ -378,7 +387,10 @@ impl Runner {
                                 },
                                 rpki::rrdp::DeltaElement::Update(update_element) => {
                                     let hash = utils::sha256(update_element.data());
-                                    let data: Option<serde_json::Value> = utils::parse_rpki_object(update_element.uri(), update_element.data());
+                                    let data = utils::parse_rpki_object(
+                                        update_element.uri(), 
+                                        update_element.data()
+                                    );
 
                                     database.add_object(
                                         update_element.data(), 
