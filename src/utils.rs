@@ -38,18 +38,6 @@ pub fn parse_rpki_object(uri: &rpki::uri::Rsync, data: &bytes::Bytes) -> Option<
                 None
             }
         },
-        _ if uri.ends_with(".mft") => { 
-            let mft = rpki::repository::manifest::Manifest::decode(data.clone(), true);
-            if let Ok(mft) = mft {
-                let mft_object = ManifestObject::from(mft);
-                match serde_json::to_value(&mft_object) {
-                    Ok(json) => Some(json),
-                    Err(_) => None,
-                }
-            } else {
-                None
-            }
-        },
         _ => None
     }
 }
