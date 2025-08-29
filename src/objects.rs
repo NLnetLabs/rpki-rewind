@@ -1,9 +1,8 @@
-use bytes::Bytes;
-use rpki::{repository::{aspa::Aspa, Roa}, uri::Rsync};
+use rpki::repository::{aspa::Aspa, Roa};
 use serde::{Serialize, Deserialize};
 
 
-pub fn create_cert(cert: rpki::repository::Cert) -> CertObject {
+pub fn create_cert(_cert: rpki::repository::Cert) -> CertObject {
     todo!()
 }
 

@@ -2,7 +2,7 @@ use std::pin::Pin;
 
 use futures_util::Stream;
 use serde_json::Value;
-use sqlx::{types::Json, Pool, Postgres, Transaction};
+use sqlx::{Pool, Postgres, Transaction};
 
 use crate::settings;
 
@@ -25,7 +25,7 @@ impl Database {
             ).as_str())
             .await.expect("could not connect to database");
         Database {
-            pool: pool
+            pool
         }
     }
 
@@ -68,6 +68,7 @@ impl Database {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn add_object(
         &self, 
         content: &[u8], 

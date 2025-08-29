@@ -11,7 +11,6 @@ use reqwest::IntoUrl;
 use rpki::rrdp::{Delta, NotificationFile, Snapshot};
 use rpki_rewind::{settings, utils};
 use sha2::Digest;
-use tokio::time::Instant;
 use tokio::{io::AsyncWriteExt};
 use tokio::sync::RwLock;
 
@@ -281,13 +280,14 @@ impl Runner {
             if !new_notification.sort_and_verify_deltas(None) {
                 download_snapshot = true;
             }
-            if let Some(last) = notification.deltas().last() {
-                if let Some(new_last) = new_notification.deltas().last() {
-                    if new_last.serial() < last.serial() {
-                        download_snapshot = true;
-                    } else {
-                        last_serial = last.serial();
-                    }
+            if 
+                let Some(last) = notification.deltas().last() && 
+                let Some(new_last) = new_notification.deltas().last() 
+            {
+                if new_last.serial() < last.serial() {
+                    download_snapshot = true;
+                } else {
+                    last_serial = last.serial();
                 }
             }
         } else {
@@ -313,7 +313,7 @@ impl Runner {
             let snapshot_path = Self::download_path(
                 &time.to_string(), 
                 &output, 
-                &new_notification.snapshot().uri().as_str()
+                new_notification.snapshot().uri().as_str()
             );
             let snapshot_path = format!("{}.xml", snapshot_path);
             let reader = std::io::BufReader::new(
@@ -333,7 +333,7 @@ impl Runner {
                         element.data(),
                         data,
                             time, 
-                            &element.uri().to_string(), 
+                            element.uri().as_ref(), 
                             Some(hash.as_str()), 
                             Some(&url), 
                             &mut transaction
@@ -366,7 +366,7 @@ impl Runner {
                     let delta_path = Self::download_path(
                         &time.to_string(), 
                         &output, 
-                        &delta.uri().as_str()
+                        delta.uri().as_str()
                     );
                     let delta_path = format!("{}.xml", delta_path);
                     let reader = std::io::BufReader::new(

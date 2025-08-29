@@ -1,9 +1,9 @@
-use std::{collections::HashMap, fs::File, io::{BufReader, Cursor, Read, Seek}, net::SocketAddr, str::FromStr};
+use std::{collections::HashMap, fs::File, io::Cursor, net::SocketAddr, str::FromStr};
 
 use bytes::Bytes;
-use futures_util::{stream, StreamExt, TryStreamExt};
+use futures_util::TryStreamExt;
 use http_body_util::{combinators::BoxBody, BodyExt, Empty, Full, StreamBody};
-use hyper::{body::{Body, Frame}, server::conn::http1, service::service_fn, Method, Request, Response, StatusCode};
+use hyper::{body::Frame, server::conn::http1, service::service_fn, Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use rpki_rewind::database::Database;
 use tokio::net::TcpListener;
@@ -24,7 +24,7 @@ async fn serve(req: Request<hyper::body::Incoming>) -> Result<Response<BoxBody<B
                         .into_owned()
                         .collect()
                 })
-                .unwrap_or_else(HashMap::new);
+                .unwrap_or_default();
 
             let Some(timestamp) = params.get("timestamp") else {
                 return bad_request();
@@ -38,11 +38,11 @@ async fn serve(req: Request<hyper::body::Incoming>) -> Result<Response<BoxBody<B
             let database = Database::new().await;
             let mut stream = database.retrieve_objects(timestamp).await;
 
-            let Ok(mut dir) = tempfile::tempdir() else {
+            let Ok(dir) = tempfile::tempdir() else {
                 return internal_server_error();
             };
             let file_path = dir.path().join("tar");
-            let Ok(mut file) = File::create(&file_path) else {
+            let Ok(file) = File::create(&file_path) else {
                 return internal_server_error();
             };
             let mut tar = tar::Builder::new(std::io::BufWriter::new(file));

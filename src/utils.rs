@@ -22,10 +22,7 @@ pub fn parse_rpki_object(
                 rpki::repository::roa::Roa::decode(data.clone(), true);
             if let Ok(roa) = roa {
                 let roa_object = RoaObject::from(roa);
-                match serde_json::to_value(&roa_object) {
-                    Ok(json) => Some(json),
-                    Err(_) => None,
-                }
+                serde_json::to_value(&roa_object).ok()
             } else {
                 None
             }
@@ -35,10 +32,7 @@ pub fn parse_rpki_object(
                 rpki::repository::aspa::Aspa::decode(data.clone(), true);
             if let Ok(aspa) = aspa {
                 let aspa_object = AspaObject::from(aspa);
-                match serde_json::to_value(&aspa_object) {
-                    Ok(json) => Some(json),
-                    Err(_) => None,
-                }
+                serde_json::to_value(&aspa_object).ok()
             } else {
                 None
             }
