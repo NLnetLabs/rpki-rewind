@@ -144,7 +144,8 @@ impl Database {
         &self, 
         timestamp: i64
     ) -> Pin<Box<dyn Stream<Item = Result<Object, sqlx::Error>> + std::marker::Send + '_>> {
-        sqlx::query_as("SELECT * FROM objects WHERE visible_on <= $1 AND (disappeared_on >= $1 OR disappeared_on IS NULL)")
+        sqlx::query_as("SELECT * FROM objects WHERE visible_on <= $1 AND 
+            (disappeared_on >= $1 OR disappeared_on IS NULL)")
             .bind(timestamp)
             .fetch(&self.pool)
     }
@@ -154,7 +155,7 @@ impl Database {
 pub struct Object {
     pub id: i32,
     pub content: Vec<u8>,
-    pub content_json: Option<String>,
+    pub content_json: Option<Value>,
     pub visible_on: i64,
     pub disappeared_on: Option<i64>,
     pub hash: String,

@@ -310,9 +310,15 @@ impl Runner {
             ).await?;
             database.remove_objects_publication_point(&url, time).await?;
 
-            let snapshot_path = Self::download_path(&time.to_string(), &output, &new_notification.snapshot().uri().as_str());
+            let snapshot_path = Self::download_path(
+                &time.to_string(), 
+                &output, 
+                &new_notification.snapshot().uri().as_str()
+            );
             let snapshot_path = format!("{}.xml", snapshot_path);
-            let reader = std::io::BufReader::new(std::fs::File::open(snapshot_path)?);
+            let reader = std::io::BufReader::new(
+                std::fs::File::open(snapshot_path)?
+            );
             let snapshot = Snapshot::parse(reader);
 
             if let Ok(snapshot) = snapshot {
@@ -320,7 +326,8 @@ impl Runner {
                 for element in snapshot.elements() {
                     let hash = utils::sha256(element.data());
 
-                    let data: Option<serde_json::Value> = utils::parse_rpki_object(element.uri(), element.data());
+                    let data: Option<serde_json::Value> = 
+                        utils::parse_rpki_object(element.uri(), element.data());
 
                     if let Err(err) = database.add_object(
                         element.data(),

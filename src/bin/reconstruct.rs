@@ -1,8 +1,8 @@
-use std::{error::Error, fs::File, io::{Cursor, Write}, path::{Path, PathBuf}};
+use std::{error::Error, fs::File, io::{Cursor, Write}, path::PathBuf};
 
 use clap::Parser;
 use futures_util::TryStreamExt;
-use rpki_rewind::{database::Database, utils};
+use rpki_rewind::{database::Database};
 
 
 #[derive(Parser, Debug)]
@@ -15,10 +15,14 @@ struct Args {
 
     /// The date and time to get state of the RPKI from (e.g. 2025-08-25T12:35:00)
     #[arg(short, long)]
-    timestamp: chrono::NaiveDateTime
+    timestamp: chrono::NaiveDateTime,
+
+    /// Compress the tar file with gzip. Will use roughly a quarter of the 
+    /// space, but generating the output takes about four times as long.
+    #[arg(short, long)]
+    compress: bool
 }
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn _main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
 
     let database = Database::new().await;
@@ -27,11 +31,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut stream = database.retrieve_objects(timestamp).await;
 
     let path = args.output;
-    let file = File::create(&path)?;
+    let mut file: Box<dyn Write> = Box::new(File::create(&path)?);
 
-    // let enc = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+    if args.compress {
+        file = Box::new(flate2::write::GzEncoder::new(
+            file, flate2::Compression::default()
+        ));
+    }
 
-    let mut tar = tar::Builder::new(std::io::BufWriter::new(file));
+    let mut tar = tar::Builder::new(
+        std::io::BufWriter::new(file)
+    );
 
     while let Some(obj) = stream.try_next().await? {
         let file_name = obj.uri.replace("rsync://", "");
@@ -47,7 +57,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     tar.finish()?;
-    println!("Done.");
+    println!("Archive created in {}", &path.display());
 
     Ok(())
+}
+
+#[tokio::main]
+async fn main() {
+    if let Err(err) = _main().await {
+        println!("The following error occurred: {}", err);
+    };
 }
