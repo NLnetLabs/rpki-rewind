@@ -168,7 +168,8 @@ impl Runner {
         P: std::fmt::Display + std::convert::AsRef<std::ffi::OsStr>
     >(time: P, base: P, url: U) -> String {
         let result = sha2::Sha256::digest(url);
-        let file_path = std::path::Path::new(&base).join(format!("{}-{}",
+        let file_path = std::path::Path::new(&base).join(format!(
+            "{}-{}",
             time,
             hex::encode(result)
         ));
