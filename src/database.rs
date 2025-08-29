@@ -29,20 +29,35 @@ impl Database {
         }
     }
 
-    pub async fn begin_transaction(&self) -> Result<Transaction<'_, Postgres>, sqlx::Error> {
+    pub async fn begin_transaction(
+        &self
+    ) -> Result<Transaction<'_, Postgres>, sqlx::Error> {
         self.pool.begin().await
     }
 
-    pub async fn commit(&self, transaction: Transaction<'_, Postgres>) -> Result<(), sqlx::Error> {
+    pub async fn commit(
+        &self, 
+        transaction: Transaction<'_, Postgres>
+    ) -> Result<(), sqlx::Error> {
         transaction.commit().await
     }
 
-    pub async fn add_startup(&self, timestamp: i64) -> Result<(), sqlx::Error> {
+    pub async fn add_startup(
+        &self, 
+        timestamp: i64
+    ) -> Result<(), sqlx::Error> {
         self.add_event("startup", timestamp, None, None, None).await?;
         self.remove_objects_all(timestamp).await
     }
 
-    pub async fn add_event(&self, event: &str, timestamp: i64, uri: Option<&str>, hash: Option<&str>, publication_point: Option<&str>) -> Result<(), sqlx::Error> {
+    pub async fn add_event(
+        &self, 
+        event: &str, 
+        timestamp: i64, 
+        uri: Option<&str>, 
+        hash: Option<&str>, 
+        publication_point: Option<&str>
+    ) -> Result<(), sqlx::Error> {
         sqlx::query("INSERT INTO events (event, timestamp, uri, hash, publication_point) VALUES ($1, $2, $3, $4, $5)")
             .bind(event)
             .bind(timestamp)
@@ -53,7 +68,16 @@ impl Database {
         Ok(())
     }
 
-    pub async fn add_object(&self, content: &[u8], content_json: Option<Value>, visible_on: i64, uri: &str, hash: Option<&str>, publication_point: Option<&str>, transaction: &mut Transaction<'_, Postgres>) -> Result<(), sqlx::Error> {
+    pub async fn add_object(
+        &self, 
+        content: &[u8], 
+        content_json: Option<Value>, 
+        visible_on: i64, 
+        uri: &str, 
+        hash: Option<&str>, 
+        publication_point: Option<&str>, 
+        transaction: &mut Transaction<'_, Postgres>
+    ) -> Result<(), sqlx::Error> {
         self.remove_objects_uri(uri, visible_on, transaction).await?;
         sqlx::query("INSERT INTO objects (content, content_json, visible_on, hash, uri, publication_point) VALUES ($1, $2, $3, $4, $5, $6)")
             .bind(content)
@@ -66,14 +90,21 @@ impl Database {
         Ok(())
     }
 
-    pub async fn remove_objects_all(&self, disappeared_on: i64) -> Result<(), sqlx::Error> {
+    pub async fn remove_objects_all(
+        &self, 
+        disappeared_on: i64
+    ) -> Result<(), sqlx::Error> {
         sqlx::query("UPDATE objects SET disappeared_on = $1 WHERE disappeared_on IS NULL")
             .bind(disappeared_on)
             .execute(&self.pool).await?;
         Ok(())
     }
 
-    pub async fn remove_objects_publication_point(&self, publication_point: &str, disappeared_on: i64) -> Result<(), sqlx::Error> {
+    pub async fn remove_objects_publication_point(
+        &self, 
+        publication_point: &str, 
+        disappeared_on: i64
+    ) -> Result<(), sqlx::Error> {
         sqlx::query("UPDATE objects SET disappeared_on = $1 WHERE publication_point = $2 AND disappeared_on IS NULL")
             .bind(disappeared_on)
             .bind(publication_point)
@@ -81,7 +112,12 @@ impl Database {
         Ok(())
     }
 
-    pub async fn remove_objects_uri(&self, uri: &str, disappeared_on: i64, transaction: &mut Transaction<'_, Postgres>) -> Result<(), sqlx::Error> {
+    pub async fn remove_objects_uri(
+        &self, 
+        uri: &str, 
+        disappeared_on: i64, 
+        transaction: &mut Transaction<'_, Postgres>
+    ) -> Result<(), sqlx::Error> {
         sqlx::query("UPDATE objects SET disappeared_on = $1 WHERE uri = $2 AND disappeared_on IS NULL")
             .bind(disappeared_on)
             .bind(uri)
@@ -89,7 +125,13 @@ impl Database {
         Ok(())
     }
 
-    pub async fn remove_objects_uri_hash(&self, uri: &str, hash: &str, disappeared_on: i64, transaction: &mut Transaction<'_, Postgres>) -> Result<(), sqlx::Error> {
+    pub async fn remove_objects_uri_hash(
+        &self, 
+        uri: &str, 
+        hash: &str, 
+        disappeared_on: i64, 
+        transaction: &mut Transaction<'_, Postgres>
+    ) -> Result<(), sqlx::Error> {
         sqlx::query("UPDATE objects SET disappeared_on = $1 WHERE uri = $2 AND hash = $3 AND disappeared_on IS NULL")
             .bind(disappeared_on)
             .bind(uri)
@@ -98,7 +140,10 @@ impl Database {
         Ok(())
     }
 
-    pub async fn retrieve_objects(&self, timestamp: i64) -> Pin<Box<dyn Stream<Item = Result<Object, sqlx::Error>> + std::marker::Send + '_>> {
+    pub async fn retrieve_objects(
+        &self, 
+        timestamp: i64
+    ) -> Pin<Box<dyn Stream<Item = Result<Object, sqlx::Error>> + std::marker::Send + '_>> {
         sqlx::query_as("SELECT * FROM objects WHERE visible_on <= $1 AND (disappeared_on >= $1 OR disappeared_on IS NULL)")
             .bind(timestamp)
             .fetch(&self.pool)

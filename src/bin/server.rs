@@ -54,7 +54,6 @@ impl App {
         loop {
             scheduler.run_pending().await;
             tokio::time::sleep(Duration::from_millis(100)).await;
-            // warn!("{:#?}", runners.clone().read().await);
         }
     }
 
@@ -178,7 +177,10 @@ impl Runner {
         file_path.to_string()
     }
 
-    async fn download<U: std::convert::AsRef<[u8]>, P: std::fmt::Display + std::convert::AsRef<std::ffi::OsStr>>(
+    async fn download<
+        U: std::convert::AsRef<[u8]>, 
+        P: std::fmt::Display + std::convert::AsRef<std::ffi::OsStr>
+    >(
         client: &reqwest::Client, 
         time: &P,
         url: &U,
@@ -221,18 +223,18 @@ impl Runner {
         let stop: Arc<Mutex<bool>> = self.stop.clone();
         tokio::spawn(async move {
             while !*stop.lock().expect("Stop Mutex read err'd") {
+                let now = tokio::time::Instant::now();
+
                 let database = database.clone();
                 let client = client.clone();
                 let url = url.clone();
                 let notification = notification.clone();
-                let now = tokio::time::Instant::now();
                 let time = chrono::Utc::now().timestamp_millis();
                 let _ = Self::retrieve(
                     database,
                     client,
                     url,
                     notification,
-                    now,
                     time
                 ).await.map_err(|e| {
                     warn!("{}", e);
@@ -249,7 +251,6 @@ impl Runner {
         client: reqwest::Client,
         url: String,
         notification: Arc<RwLock<Option<NotificationFile>>>,
-        now: Instant,
         time: i64,
     ) -> Result<(), Box<dyn Error>> {
         let output = settings::DOWNLOAD_FOLDER.to_string();

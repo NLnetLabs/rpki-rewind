@@ -62,7 +62,8 @@ impl From<Aspa> for AspaObject {
     fn from(value: Aspa) -> Self {
         Self { 
             customer: value.content().customer_as().into_u32(), 
-            providers: value.content().provider_as_set().iter().map(|p| p.into_u32()).collect()
+            providers: value.content().provider_as_set()
+                .iter().map(|p| p.into_u32()).collect()
         }
     }
 }
