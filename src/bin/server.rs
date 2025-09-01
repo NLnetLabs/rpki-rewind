@@ -10,6 +10,7 @@ use futures_util::StreamExt;
 
 use clokwerk::{AsyncScheduler, TimeUnits};
 use log::{info, warn, error, debug};
+use rand::Rng;
 use reqwest::IntoUrl;
 use rpki::rrdp::{Delta, NotificationFile, Snapshot};
 use rpki::uri::Rsync;
@@ -243,6 +244,12 @@ impl Runner {
         
         let stop: Arc<Mutex<bool>> = self.stop.clone();
         tokio::spawn(async move {
+            let random_secs = {
+                let mut rng = rand::rng();
+                rng.random_range(0..settings::UPDATE_NOTIFICATION)
+            };
+            tokio::time::sleep(Duration::from_secs(random_secs.into())).await;
+
             while !*stop.lock().expect("Stop Mutex read err'd") {
                 let now = tokio::time::Instant::now();
 
@@ -465,6 +472,12 @@ impl Runner {
         
         let stop: Arc<Mutex<bool>> = self.stop.clone();
         tokio::spawn(async move {
+            let random_secs = {
+                let mut rng = rand::rng();
+                rng.random_range(0..settings::UPDATE_NOTIFICATION)
+            };
+            tokio::time::sleep(Duration::from_secs(random_secs.into())).await;
+            
             while !*stop.lock().expect("Stop Mutex read err'd") {
                 let now = tokio::time::Instant::now();
 
@@ -524,8 +537,10 @@ impl Runner {
         let mut state = state.write().await;
         let mut transaction = database.begin_transaction().await?;
 
+        let mut changes = false;
         let removed = state.difference(&new_state);
         for (entry_uri, entry_hash) in removed {
+            changes = true;
             database.remove_objects_uri_hash(
                 entry_uri,
                 entry_hash,
@@ -535,6 +550,7 @@ impl Runner {
         }
         let added_or_updated = new_state.difference(&state);
         for (entry_uri, entry_hash) in added_or_updated {
+            changes = true;
             let path = utils::rsync_uri_to_path(&uri, &path, entry_uri)?;
             let mut file = std::fs::File::open(path)?;
             let mut content = Vec::new();
@@ -558,6 +574,10 @@ impl Runner {
                 &mut transaction
             ).await?
         }
+
+        if changes {
+            info!("RSYNC UPDATE {}", &uri);
+        }        
 
         database.commit(transaction).await?;
         *state = new_state;
