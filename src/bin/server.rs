@@ -1,20 +1,26 @@
+use std::collections::HashSet;
 use std::error::Error;
+use std::io::Read;
 use std::{collections::HashMap, fmt::Display};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use bytes::Bytes;
 use futures_util::StreamExt;
 
 use clokwerk::{AsyncScheduler, TimeUnits};
-use log::{info, warn, error};
+use log::{info, warn, error, debug};
 use reqwest::IntoUrl;
 use rpki::rrdp::{Delta, NotificationFile, Snapshot};
+use rpki::uri::Rsync;
 use rpki_rewind::{settings, utils};
 use sha2::Digest;
+use tempfile::TempDir;
 use tokio::{io::AsyncWriteExt};
 use tokio::sync::RwLock;
 
 use rpki_rewind::database::Database;
+use walkdir::WalkDir;
 
 
 
@@ -34,7 +40,7 @@ impl App {
     }
 
     pub async fn main(&self) {
-        colog::init();
+        colog::default_builder().filter_level(log::LevelFilter::Info).init();
 
         let database = Arc::new(Database::new().await);
         if let Err(err) = database.add_startup(utils::timestamp()).await {
@@ -57,7 +63,7 @@ impl App {
     }
 
     async fn update_runners(database: Arc<Database>, runners: Arc<RwLock<HashMap<String, Runner>>>) {
-        match Self::fetch_rrdp_urls().await {
+        match Self::fetch_urls().await {
             Ok(rrdps) => {
                 let mut runners = runners.write().await;
                 for url in &rrdps {
@@ -101,7 +107,7 @@ impl App {
         };
     }
 
-    async fn fetch_rrdp_urls() -> Result<Vec<String>, FetchError> {
+    async fn fetch_urls() -> Result<Vec<String>, FetchError> {
         let client = reqwest::Client::builder()
             .user_agent(settings::USER_AGENT)
             .build()?;
@@ -109,8 +115,14 @@ impl App {
         let value = resp.json::<serde_json::Value>().await?;
         let rrdps = || -> Option<Vec<String>> {
             let root = value.as_object()?;
-            let rrdp = root["rrdp"].as_object()?;
-            Some(rrdp.keys().cloned().collect())
+            let mut result: Vec<String> = Vec::new();
+            let mut rrdp: Vec<String> = root["rrdp"].as_object()?
+                .keys().cloned().collect();
+            let mut rsync: Vec<String> = root["rsync"].as_object()?
+                .keys().cloned().collect();
+            result.append(&mut rrdp);
+            result.append(&mut rsync);
+            Some(result)
         }();
         let Some(rrdps) = rrdps else {
             return Err(FetchError::EmptyRRDPs);
@@ -148,6 +160,7 @@ struct Runner {
     database: Arc<Database>,
     url: String,
     notification: Arc<RwLock<Option<NotificationFile>>>,
+    rsync_state: Arc<RwLock<HashSet<(String, String)>>>,
     stop: Arc<Mutex<bool>>
 }
 
@@ -155,11 +168,18 @@ impl Runner {
     pub fn new(database: Arc<Database>, url: String) -> Self {
         let mut runner = Self { 
             database,
-            url,
+            url: url.clone(),
             notification: Arc::new(RwLock::new(None)),
+            rsync_state: Arc::new(RwLock::new(HashSet::new())),
             stop: Arc::new(Mutex::new(false))
         };
-        runner.start();
+        if url.starts_with("https://") {
+            runner.start_rrdp();
+        } else if url.starts_with("rsync://") {
+            runner.start_rsync();
+        } else {
+            panic!("I have no idea how this happened");
+        }
         runner
     }
 
@@ -212,7 +232,8 @@ impl Runner {
         Ok(())
     }
 
-    pub fn start(&mut self) {
+    pub fn start_rrdp(&mut self) {
+        info!("Started {}", &self.url);
         let client = reqwest::Client::builder()
             .user_agent(settings::USER_AGENT)
             .build().expect("reqwest is broken beyond repair");
@@ -230,7 +251,7 @@ impl Runner {
                 let url = url.clone();
                 let notification = notification.clone();
                 let time = chrono::Utc::now().timestamp_millis();
-                let _ = Self::retrieve(
+                let _ = Self::retrieve_rrdp(
                     database,
                     client,
                     url,
@@ -246,7 +267,7 @@ impl Runner {
         });
     }
 
-    pub async fn retrieve(
+    pub async fn retrieve_rrdp(
         database: Arc<Database>,
         client: reqwest::Client,
         url: String,
@@ -433,6 +454,117 @@ impl Runner {
         Ok(())
     }
 
+    pub fn start_rsync(&mut self) {
+        info!("Started {}", &self.url);
+        let uri = String::from(self.url.as_str());
+        let database = self.database.clone();
+        let state = self.rsync_state.clone();
+
+        let dir = Arc::new(tempfile::tempdir()
+            .expect("Cannot create temporary directory"));
+        
+        let stop: Arc<Mutex<bool>> = self.stop.clone();
+        tokio::spawn(async move {
+            while !*stop.lock().expect("Stop Mutex read err'd") {
+                let now = tokio::time::Instant::now();
+
+                let database = database.clone();
+                let uri = uri.clone();
+                let state = state.clone();
+                let dir = dir.clone();
+                let time = chrono::Utc::now().timestamp_millis();
+                let _ = Self::retrieve_rsync(
+                    database,
+                    uri,
+                    state,
+                    dir,
+                    time
+                ).await.map_err(|e| {
+                    warn!("{}", e);
+                });
+                tokio::time::sleep_until(
+                    now + Duration::from_secs(settings::UPDATE_NOTIFICATION.into())
+                ).await;                
+            }
+        });
+    }
+
+    pub async fn retrieve_rsync(
+        database: Arc<Database>,
+        uri: String,
+        state: Arc<RwLock<HashSet<(String, String)>>>,
+        dir: Arc<TempDir>,
+        time: i64
+    ) -> Result<(), Box<dyn Error>> {
+        let path = dir.path().to_string_lossy().into_owned();
+        let _output = std::process::Command::new("rsync")
+            .args(["-a", "--contimeout=10", uri.as_str(), &path])
+            .output()?;
+
+        let mut new_state: HashSet<(String, String)> = HashSet::new();
+
+        for entry in WalkDir::new(&path).into_iter().filter_map(|e| e.ok()) {
+            if entry.path().is_dir() {
+                continue;
+            }
+            debug!("{}", entry.path().display());
+            let mut file = std::fs::File::open(entry.path())?;
+            let mut content = Vec::new();
+            file.read_to_end(&mut content)?;
+            let hash = utils::sha256(&content.into());
+
+            let entry_uri = utils::rsync_path_to_uri(
+                &uri, 
+                &path, 
+                entry.path()
+            )?;
+            new_state.insert((entry_uri, hash));
+        }
+
+        let mut state = state.write().await;
+        let mut transaction = database.begin_transaction().await?;
+
+        let removed = state.difference(&new_state);
+        for (entry_uri, entry_hash) in removed {
+            database.remove_objects_uri_hash(
+                entry_uri,
+                entry_hash,
+                time,
+                &mut transaction
+            ).await?;
+        }
+        let added_or_updated = new_state.difference(&state);
+        for (entry_uri, entry_hash) in added_or_updated {
+            let path = utils::rsync_uri_to_path(&uri, &path, entry_uri)?;
+            let mut file = std::fs::File::open(path)?;
+            let mut content = Vec::new();
+            file.read_to_end(&mut content)?;
+
+            let content: Bytes = content.into();
+
+            let content_json: Option<serde_json::Value> = 
+                utils::parse_rpki_object(
+                    &Rsync::from_string(entry_uri.to_string())?, 
+                    &content
+                );
+
+            database.add_object(
+                &content, 
+                content_json, 
+                time, 
+                entry_uri, 
+                Some(entry_hash), 
+                Some(&uri), 
+                &mut transaction
+            ).await?
+        }
+
+        database.commit(transaction).await?;
+        *state = new_state;
+
+        Ok(())
+    }
+
     pub fn stop(&mut self) {
         let mut stop = self.stop.lock().expect("Stop Mutex err'd");
         *stop = true;
@@ -445,7 +577,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_fetch_rrdp_urls() {
-        let urls = crate::App::fetch_rrdp_urls().await.unwrap();
+        let urls = crate::App::fetch_urls().await.unwrap();
         dbg!(urls);
     }
 

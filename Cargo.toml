@@ -27,3 +27,4 @@ tempfile = "3.21.0"
 tokio = { version = "1.47.1", features = ["rt", "macros", "rt-multi-thread", "fs"] }
 tokio-util = "0.7.16"
 url = "2.5.7"
+walkdir = "2.5.0"
