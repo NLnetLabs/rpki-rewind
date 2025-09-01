@@ -467,7 +467,7 @@ impl Runner {
         let database = self.database.clone();
         let state = self.rsync_state.clone();
 
-        let dir = Arc::new(tempfile::tempdir()
+        let dir = Arc::new(tempfile::TempDir::with_prefix("rewind-")
             .expect("Cannot create temporary directory"));
         
         let stop: Arc<Mutex<bool>> = self.stop.clone();
