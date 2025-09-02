@@ -55,7 +55,6 @@ async fn serve(req: Request<hyper::body::Incoming>) -> Result<Response<BoxBody<B
                     break;
                 };
                 let file_name = obj.uri.replace("rsync://", "");
-                // println!("Adding {}", file_name);
 
                 let mut header = tar::Header::new_gnu();
                 header.set_size(obj.content.len() as u64);
@@ -77,11 +76,9 @@ async fn serve(req: Request<hyper::body::Incoming>) -> Result<Response<BoxBody<B
             };
 
             let reader_stream = ReaderStream::new(file);
-                // Convert to http_body_util::BoxBody
             let stream_body = StreamBody::new(reader_stream.map_ok(Frame::data));
             let boxed_body = BodyExt::boxed(stream_body);
 
-            // Send response
             let response = Response::builder()
                 .status(StatusCode::OK)
                 .header("Content-Type", "application/x-tar")

@@ -442,7 +442,9 @@ impl Runner {
                                 rpki::rrdp::DeltaElement::Withdraw(withdraw_element) => {
                                     database.remove_objects_uri_hash(
                                         withdraw_element.uri().as_str(), 
-                                        hex::encode(withdraw_element.hash().as_slice()).as_str(),
+                                        hex::encode(
+                                            withdraw_element.hash().as_slice()
+                                        ).as_str(),
                                         time, 
                                         &mut transaction
                                     ).await?;
