@@ -1,7 +1,13 @@
-use std::{fs::File, io::Cursor, str::FromStr};
+use std::{fs::File, io::{Cursor, Write}, str::FromStr};
 
 use axum::{
-    body::Body, http::StatusCode, response::{Html, IntoResponse}, routing::{get, post}, Form, Json, Router
+    body::Body, 
+    http::StatusCode, 
+    response::{Html, IntoResponse}, 
+    routing::{get, post}, 
+    Form, 
+    Json, 
+    Router
 };
 use futures_util::TryStreamExt;
 use rpki_rewind::database::{self, Database};
@@ -77,32 +83,43 @@ async fn wayback(
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     };
     let file_path = dir.path().join("tar");
-    let Ok(file) = File::create(&file_path) else {
+    let Ok(mut file) = File::create(&file_path) else {
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     };
-    let mut tar = tar::Builder::new(std::io::BufWriter::new(file));
 
-    loop {
-        let Ok(obj) = stream.try_next().await else {
-            return Err(StatusCode::BAD_REQUEST);
-        };
-        let Some(obj) = obj else {
-            break;
-        };
-        let file_name = obj.uri.replace("rsync://", "");
+    {
+        let mut tar = tar::Builder::new(std::io::BufWriter::new(&mut file));
 
-        let mut header = tar::Header::new_gnu();
-        header.set_size(obj.content.len() as u64);
-        header.set_mode(0o644);
-        header.set_mtime((obj.visible_on / 1000) as u64);
-        header.set_cksum();
+        loop {
+            let Ok(obj) = stream.try_next().await else {
+                return Err(StatusCode::BAD_REQUEST);
+            };
+            let Some(obj) = obj else {
+                break;
+            };
+            let file_name = obj.uri.replace("rsync://", "");
 
-        let Ok(_) = tar.append_data(&mut header, file_name, Cursor::new(obj.content)) else {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(obj.content.len() as u64);
+            header.set_mode(0o644);
+            header.set_mtime((obj.visible_on / 1000) as u64);
+            header.set_cksum();
+
+            let Ok(_) = tar.append_data(
+                &mut header, 
+                file_name, 
+                Cursor::new(obj.content)
+            ) else {
+                return Err(StatusCode::INTERNAL_SERVER_ERROR);
+            };
+        }
+
+        let Ok(_) = tar.finish() else {
             return Err(StatusCode::INTERNAL_SERVER_ERROR);
         };
     }
 
-    let Ok(_) = tar.finish() else {
+    let Ok(_) = file.flush() else {
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     };
     
@@ -110,22 +127,18 @@ async fn wayback(
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     };
 
-    // let Ok(_) = file.sync_all().await else {
-    //     return Err(StatusCode::INTERNAL_SERVER_ERROR);
-    // };
+    let Ok(metadata) = file.metadata().await else {
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    };
 
-    // let Ok(metadata) = file.metadata().await else {
-    //     return Err(StatusCode::INTERNAL_SERVER_ERROR);
-    // };
-
-    // let size = metadata.size().to_string();
+    let size = metadata.len().to_string();
 
     let stream = ReaderStream::new(file);
     let body = Body::from_stream(stream);
 
     let headers = [
         ("Content-Type", "application/x-tar".to_string()),
-        // ("Content-Length", size),
+        ("Content-Length", size),
         ("Content-Disposition", "attachment; filename=\"rpki.tar\"".to_string())
     ];
     Ok((headers, body))
