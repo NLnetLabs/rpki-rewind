@@ -1,7 +1,8 @@
 use std::pin::Pin;
 
 use futures_util::Stream;
-use serde_json::Value;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use sqlx::{Pool, Postgres, Transaction};
 
 use crate::settings;
@@ -145,14 +146,26 @@ impl Database {
         &self, 
         timestamp: i64
     ) -> Pin<Box<dyn Stream<Item = Result<Object, sqlx::Error>> + std::marker::Send + '_>> {
-        sqlx::query_as("SELECT * FROM objects WHERE visible_on <= $1 AND 
-            (disappeared_on >= $1 OR disappeared_on IS NULL)")
+        sqlx::query_as("SELECT id, content, content_json, visible_on, 
+            disappeared_on, hash, uri, publication_point FROM objects WHERE 
+            visible_on <= $1 AND (disappeared_on >= $1 OR disappeared_on IS NULL)")
             .bind(timestamp)
+            .fetch(&self.pool)
+    }
+
+    pub async fn retrieve_objects_asn(
+        &self, 
+        as_id: i64
+    ) -> Pin<Box<dyn Stream<Item = Result<Object, sqlx::Error>> + std::marker::Send + '_>> {
+        sqlx::query_as("SELECT id, content, content_json, visible_on, 
+            disappeared_on, hash, uri, publication_point FROM objects WHERE 
+            content_json @> $1")
+            .bind(json!({"as_id": as_id}))
             .fetch(&self.pool)
     }
 }
 
-#[derive(sqlx::FromRow, Debug, PartialEq, Eq)]
+#[derive(sqlx::FromRow, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Object {
     pub id: i32,
     pub content: Vec<u8>,
