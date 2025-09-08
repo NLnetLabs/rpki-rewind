@@ -1,9 +1,10 @@
 use std::pin::Pin;
 
+use chrono::NaiveDateTime;
 use futures_util::Stream;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use sqlx::{Pool, Postgres, Transaction};
+use sqlx::{types::ipnet, Pool, Postgres, Transaction};
 
 use crate::settings;
 
@@ -59,7 +60,10 @@ impl Database {
         hash: Option<&str>, 
         publication_point: Option<&str>
     ) -> Result<(), sqlx::Error> {
-        sqlx::query("INSERT INTO events (event, timestamp, uri, hash, publication_point) VALUES ($1, $2, $3, $4, $5)")
+        sqlx::query(
+            "INSERT INTO events 
+            (event, timestamp, uri, hash, publication_point) 
+            VALUES ($1, $2, $3, $4, $5)")
             .bind(event)
             .bind(timestamp)
             .bind(uri)
@@ -79,24 +83,30 @@ impl Database {
         hash: Option<&str>, 
         publication_point: Option<&str>, 
         transaction: &mut Transaction<'_, Postgres>
-    ) -> Result<(), sqlx::Error> {
+    ) -> Result<i32, sqlx::Error> {
         self.remove_objects_uri(uri, visible_on, transaction).await?;
-        sqlx::query("INSERT INTO objects (content, content_json, visible_on, hash, uri, publication_point) VALUES ($1, $2, $3, $4, $5, $6)")
+        let res:(i32,) = sqlx::query_as::<_, (i32, )>(
+            "INSERT INTO objects 
+                (content, content_json, visible_on, hash, uri, publication_point) 
+                VALUES ($1, $2, $3, $4, $5, $6)
+                RETURNING id")
             .bind(content)
             .bind(content_json)
             .bind(visible_on)
             .bind(hash)
             .bind(uri)
             .bind(publication_point)
-            .execute(&mut **transaction).await?;
-        Ok(())
+            .fetch_one(&mut **transaction).await?;
+        Ok(res.0)
     }
 
     pub async fn remove_objects_all(
         &self, 
         disappeared_on: i64
     ) -> Result<(), sqlx::Error> {
-        sqlx::query("UPDATE objects SET disappeared_on = $1 WHERE disappeared_on IS NULL")
+        sqlx::query(
+            "UPDATE objects SET disappeared_on = $1 
+            WHERE disappeared_on IS NULL")
             .bind(disappeared_on)
             .execute(&self.pool).await?;
         Ok(())
@@ -107,7 +117,9 @@ impl Database {
         publication_point: &str, 
         disappeared_on: i64
     ) -> Result<(), sqlx::Error> {
-        sqlx::query("UPDATE objects SET disappeared_on = $1 WHERE publication_point = $2 AND disappeared_on IS NULL")
+        sqlx::query(
+            "UPDATE objects SET disappeared_on = $1 
+            WHERE publication_point = $2 AND disappeared_on IS NULL")
             .bind(disappeared_on)
             .bind(publication_point)
             .execute(&self.pool).await?;
@@ -120,7 +132,9 @@ impl Database {
         disappeared_on: i64, 
         transaction: &mut Transaction<'_, Postgres>
     ) -> Result<(), sqlx::Error> {
-        sqlx::query("UPDATE objects SET disappeared_on = $1 WHERE uri = $2 AND disappeared_on IS NULL")
+        sqlx::query(
+            "UPDATE objects SET disappeared_on = $1 
+            WHERE uri = $2 AND disappeared_on IS NULL")
             .bind(disappeared_on)
             .bind(uri)
             .execute(&mut **transaction).await?;
@@ -134,7 +148,9 @@ impl Database {
         disappeared_on: i64, 
         transaction: &mut Transaction<'_, Postgres>
     ) -> Result<(), sqlx::Error> {
-        sqlx::query("UPDATE objects SET disappeared_on = $1 WHERE uri = $2 AND hash = $3 AND disappeared_on IS NULL")
+        sqlx::query(
+            "UPDATE objects SET disappeared_on = $1 
+            WHERE uri = $2 AND hash = $3 AND disappeared_on IS NULL")
             .bind(disappeared_on)
             .bind(uri)
             .bind(hash)
@@ -146,7 +162,8 @@ impl Database {
         &self, 
         timestamp: i64
     ) -> Pin<Box<dyn Stream<Item = Result<Object, sqlx::Error>> + std::marker::Send + '_>> {
-        sqlx::query_as("SELECT id, content, content_json, visible_on, 
+        sqlx::query_as(
+            "SELECT id, content, content_json, visible_on, 
             disappeared_on, hash, uri, publication_point FROM objects WHERE 
             visible_on <= $1 AND (disappeared_on >= $1 OR disappeared_on IS NULL)")
             .bind(timestamp)
@@ -157,11 +174,58 @@ impl Database {
         &self, 
         as_id: i64
     ) -> Pin<Box<dyn Stream<Item = Result<Object, sqlx::Error>> + std::marker::Send + '_>> {
-        sqlx::query_as("SELECT id, content, content_json, visible_on, 
+        sqlx::query_as(
+            "SELECT id, content, content_json, visible_on, 
             disappeared_on, hash, uri, publication_point FROM objects WHERE 
             content_json @> $1")
             .bind(json!({"as_id": as_id}))
             .fetch(&self.pool)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn add_roa(
+        &self, 
+        object_id: i32,
+        prefix: ipnet::IpNet,
+        max_length: Option<i16>,
+        as_id: i64,
+        not_before: NaiveDateTime,
+        not_after: NaiveDateTime,
+        transaction: &mut Transaction<'_, Postgres>
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO roas (object_id, prefix, max_length, as_id, 
+            not_before, not_after) VALUES ($1, $2, $3, $4, $5, $6)")
+            .bind(object_id)
+            .bind(prefix)
+            .bind(max_length)
+            .bind(as_id)
+            .bind(not_before)
+            .bind(not_after)
+            .execute(&mut **transaction).await?;
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn add_aspa(
+        &self, 
+        object_id: i32,
+        customer: i64,
+        provider: i64,
+        not_before: NaiveDateTime,
+        not_after: NaiveDateTime,
+        transaction: &mut Transaction<'_, Postgres>
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO aspas (object_id, customer, provider, 
+            not_before, not_after) VALUES ($1, $2, $3, $4, $5)")
+            .bind(object_id)
+            .bind(customer)
+            .bind(provider)
+            .bind(not_before)
+            .bind(not_after)
+            .execute(&mut **transaction).await?;
+        Ok(())
     }
 }
 

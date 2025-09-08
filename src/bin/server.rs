@@ -14,8 +14,10 @@ use rand::Rng;
 use reqwest::IntoUrl;
 use rpki::rrdp::{Delta, NotificationFile, Snapshot};
 use rpki::uri::Rsync;
+use rpki_rewind::objects::RpkiObject;
 use rpki_rewind::{settings, utils};
 use sha2::Digest;
+use sqlx::Transaction;
 use tempfile::TempDir;
 use tokio::{io::AsyncWriteExt};
 use tokio::sync::RwLock;
@@ -274,6 +276,60 @@ impl Runner {
         });
     }
 
+    pub async fn add_to_database(
+        database: Arc<Database>, 
+        transaction: &mut Transaction<'_, sqlx::Postgres>,
+        object_id: i32,
+        parsed: Option<RpkiObject>
+    ) -> Result<(), Box<dyn Error>> {
+        match parsed {
+            Some(RpkiObject::Roa(roa)) => {
+                for ip in roa.content().v4_addrs().iter() {
+                    database.add_roa(
+                        object_id, 
+                        ipnet::Ipv4Net::new(
+                            ip.prefix().to_v4(),
+                            ip.prefix().addr_len()
+                        ).expect("rpki-rs error").into(),
+                        ip.max_length().map(Into::into),
+                        roa.content().as_id().into_u32().into(),
+                        roa.cert().validity().not_before().naive_utc(),
+                        roa.cert().validity().not_after().naive_utc(),
+                        transaction
+                    ).await?;
+                }
+                for ip in roa.content().v6_addrs().iter() {
+                    database.add_roa(
+                        object_id, 
+                        ipnet::Ipv6Net::new(
+                            ip.prefix().to_v6(),
+                            ip.prefix().addr_len()
+                        ).expect("rpki-rs error").into(),
+                        ip.max_length().map(Into::into),
+                        roa.content().as_id().into_u32().into(),
+                        roa.cert().validity().not_before().naive_utc(),
+                        roa.cert().validity().not_after().naive_utc(),
+                        transaction
+                    ).await?;
+                }
+            },
+            Some(RpkiObject::Aspa(aspa)) => {
+                for provider in aspa.content().provider_as_set().iter() {
+                    database.add_aspa(
+                        object_id, 
+                        aspa.content().customer_as().into_u32().into(), 
+                        provider.into_u32().into(), 
+                        aspa.cert().validity().not_before().naive_utc(), 
+                        aspa.cert().validity().not_after().naive_utc(), 
+                        transaction
+                    ).await?;
+                }
+            },
+            None => {}
+        }
+        Ok(())
+    }
+
     pub async fn retrieve_rrdp(
         database: Arc<Database>,
         client: reqwest::Client,
@@ -355,20 +411,34 @@ impl Runner {
                 for element in snapshot.elements() {
                     let hash = utils::sha256(element.data());
 
-                    let data: Option<serde_json::Value> = 
-                        utils::parse_rpki_object(element.uri(), element.data());
+                    let parsed = RpkiObject::parse_rpki_object(
+                        element.uri(), 
+                        element.data()
+                    );
 
-                    if let Err(err) = database.add_object(
+                    let object_id = database.add_object(
                         element.data(),
-                        data,
+                        None,
                             time, 
                             element.uri().as_ref(), 
                             Some(hash.as_str()), 
                             Some(&url), 
                             &mut transaction
-                    ).await {
-                        error!("Could not add object to database: {}", err);
-                    }
+                    ).await;
+
+                    match object_id {
+                        Err(err) => { 
+                            error!("Could not add object to database: {}", err);
+                        },
+                        Ok(object_id) => {
+                            Self::add_to_database(
+                                database.clone(), 
+                                &mut transaction, 
+                                object_id, 
+                                parsed
+                            ).await?;
+                        }
+                    };
                 }
                 if let Err(err) = database.commit(transaction).await {
                     error!("Could not commit database transaction: {}", err);
@@ -407,36 +477,50 @@ impl Runner {
                             match element {
                                 rpki::rrdp::DeltaElement::Publish(publish_element) => {
                                     let hash = utils::sha256(publish_element.data());
-                                    let data = utils::parse_rpki_object(
-                                            publish_element.uri(), 
-                                            publish_element.data()
-                                        );
+                                    let parsed = RpkiObject::parse_rpki_object(
+                                        publish_element.uri(), 
+                                        publish_element.data()
+                                    );
 
-                                    database.add_object(
+                                    let object_id = database.add_object(
                                         publish_element.data(), 
-                                        data,
+                                        None,
                                         time, 
                                         publish_element.uri().as_str(), 
                                         Some(hash.as_str()), 
                                         Some(&url), 
                                         &mut transaction
                                     ).await?;
+
+                                    Self::add_to_database(
+                                        database.clone(), 
+                                        &mut transaction, 
+                                        object_id, 
+                                        parsed
+                                    ).await?;
                                 },
                                 rpki::rrdp::DeltaElement::Update(update_element) => {
                                     let hash = utils::sha256(update_element.data());
-                                    let data = utils::parse_rpki_object(
+                                    let parsed = RpkiObject::parse_rpki_object(
                                         update_element.uri(), 
                                         update_element.data()
                                     );
 
-                                    database.add_object(
+                                    let object_id = database.add_object(
                                         update_element.data(), 
-                                        data,
+                                        None,
                                         time, 
                                         update_element.uri().as_str(), 
                                         Some(hash.as_str()), 
                                         Some(&url), 
                                         &mut transaction
+                                    ).await?;
+
+                                    Self::add_to_database(
+                                        database.clone(), 
+                                        &mut transaction, 
+                                        object_id, 
+                                        parsed
                                     ).await?;
                                 },
                                 rpki::rrdp::DeltaElement::Withdraw(withdraw_element) => {
@@ -560,21 +644,27 @@ impl Runner {
 
             let content: Bytes = content.into();
 
-            let content_json: Option<serde_json::Value> = 
-                utils::parse_rpki_object(
-                    &Rsync::from_string(entry_uri.to_string())?, 
-                    &content
-                );
+            let parsed = RpkiObject::parse_rpki_object(
+                &Rsync::from_string(entry_uri.to_string())?, 
+                &content
+            );
 
-            database.add_object(
+            let object_id = database.add_object(
                 &content, 
-                content_json, 
+                None, 
                 time, 
                 entry_uri, 
                 Some(entry_hash), 
                 Some(&uri), 
                 &mut transaction
-            ).await?
+            ).await?;
+
+            Self::add_to_database(
+                database.clone(),
+                &mut transaction,
+                object_id,
+                parsed
+            ).await?;
         }
 
         if changes {
