@@ -44,8 +44,10 @@ async fn _main() -> Result<(), Box<dyn Error>> {
     );
 
     while let Some(obj) = stream.try_next().await? {
-        let file_name = obj.uri.replace("rsync://", "");
-        // println!("Adding {}", file_name);
+        let Some(file_name) = obj.uri else {
+            continue;
+        };
+        let file_name = file_name.replace("rsync://", "");
 
         let mut header = tar::Header::new_gnu();
         header.set_size(obj.content.len() as u64);

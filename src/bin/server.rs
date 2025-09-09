@@ -418,7 +418,6 @@ impl Runner {
 
                     let object_id = database.add_object(
                         element.data(),
-                        None,
                             time, 
                             element.uri().as_ref(), 
                             Some(hash.as_str()), 
@@ -484,7 +483,6 @@ impl Runner {
 
                                     let object_id = database.add_object(
                                         publish_element.data(), 
-                                        None,
                                         time, 
                                         publish_element.uri().as_str(), 
                                         Some(hash.as_str()), 
@@ -508,7 +506,6 @@ impl Runner {
 
                                     let object_id = database.add_object(
                                         update_element.data(), 
-                                        None,
                                         time, 
                                         update_element.uri().as_str(), 
                                         Some(hash.as_str()), 
@@ -651,7 +648,6 @@ impl Runner {
 
             let object_id = database.add_object(
                 &content, 
-                None, 
                 time, 
                 entry_uri, 
                 Some(entry_hash), 

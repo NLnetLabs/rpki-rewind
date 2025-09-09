@@ -11,7 +11,7 @@ CREATE TABLE events (
 CREATE TABLE objects (
     id SERIAL NOT NULL,
     content BYTEA NOT NULL, 
-    content_json JSONB,
+    -- content_json JSONB,
     visible_on BIGINT, 
     disappeared_on BIGINT, 
     hash TEXT, 
@@ -45,7 +45,7 @@ CREATE INDEX IF NOT EXISTS idx_objects_uri ON objects (uri);
 CREATE INDEX IF NOT EXISTS idx_objects_publication_point ON objects (publication_point);
 CREATE INDEX IF NOT EXISTS idx_objects_visible_on ON objects (visible_on);
 CREATE INDEX IF NOT EXISTS idx_objects_disappeared_on ON objects (disappeared_on);
-CREATE INDEX IF NOT EXISTS idx_objects_content_json ON objects USING gin (content_json);
+-- CREATE INDEX IF NOT EXISTS idx_objects_content_json ON objects USING gin (content_json);
 
 CREATE INDEX IF NOT EXISTS idx_roas_prefix ON roas (prefix);
 CREATE INDEX IF NOT EXISTS idx_roas_as_id ON roas (as_id);

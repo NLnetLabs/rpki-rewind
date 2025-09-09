@@ -10,7 +10,7 @@ use axum::{
     Router
 };
 use futures_util::TryStreamExt;
-use rpki_rewind::database::{self, Database};
+use rpki_rewind::database::Database;
 use serde::{Deserialize, Serialize};
 use tokio_util::io::ReaderStream;
 
@@ -18,11 +18,14 @@ use tokio_util::io::ReaderStream;
 async fn main() {
     let app = Router::new()
         .route("/", get(index))
+        .route("/objects.html", get(objects))
         .route("/wayback", post(wayback))
-        .route("/query", get(query));
+        .route("/roas", get(roas))
+        .route("/aspas", get(aspas));
 
     let listener = 
         tokio::net::TcpListener::bind("127.0.0.1:3000").await.unwrap();
+    println!("Server listening on {}", &listener.local_addr().unwrap());
     axum::serve(listener, app).await.unwrap();
 }
 
@@ -30,32 +33,59 @@ async fn index() -> Html<&'static str> {
     Html(include_str!("../../assets/http/index.html"))
 }
 
+async fn objects() -> Html<&'static str> {
+    Html(include_str!("../../assets/http/objects.html"))
+}
+
 #[derive(Serialize, Deserialize, Debug)]
-pub struct QueryRequest {
+pub struct RoasRequest {
     as_id: Option<u32>
 }
 
-async fn query(
-    Form(form): Form<QueryRequest>
+async fn roas(
+    Form(form): Form<RoasRequest>
 ) -> impl IntoResponse {
     let database = Database::new().await;
-    let mut stream;
+    let objects;
     if let Some(as_id) = form.as_id {
-        stream = database.retrieve_objects_asn(as_id.into()).await;
+        objects = database.retrieve_roas_asn(as_id.into()).await;
     } else {
         return Err(StatusCode::IM_A_TEAPOT);
     }
-    let mut objects: Vec<database::Object> = Vec::new();
-
-    loop {
-        let Ok(obj) = stream.try_next().await else {
+    let objects = match objects {
+        Ok(objs) => objs,
+        Err(e) => {
+            println!("{}", e);
             return Err(StatusCode::BAD_REQUEST);
-        };
-        let Some(obj) = obj else {
-            break;
-        };
-        objects.push(obj);
+        }
+    };
+
+    Ok(Json(objects))
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct AspasRequest {
+    customer: Option<u32>
+}
+
+async fn aspas(
+    Form(form): Form<AspasRequest>
+) -> impl IntoResponse {
+    let database = Database::new().await;
+    let objects;
+    if let Some(customer) = form.customer {
+        objects = database.retrieve_aspas_customer(customer.into()).await;
+    } else {
+        return Err(StatusCode::IM_A_TEAPOT);
     }
+    let objects = match objects {
+        Ok(objs) => objs,
+        Err(e) => {
+            println!("{}", e);
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    };
+
     Ok(Json(objects))
 }
 
@@ -97,7 +127,10 @@ async fn wayback(
             let Some(obj) = obj else {
                 break;
             };
-            let file_name = obj.uri.replace("rsync://", "");
+            let Some(file_name) = obj.uri else {
+                return Err(StatusCode::INTERNAL_SERVER_ERROR);
+            };
+            let file_name = file_name.replace("rsync://", "");
 
             let mut header = tar::Header::new_gnu();
             header.set_size(obj.content.len() as u64);

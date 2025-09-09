@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>RPKI Rewind objects</title>
+    <style>
+        body {
+            font-family: system-ui, sans-serif;
+        }
+    </style>
+</head>
+
+<body>
+    <div>
+        <h1>RPKI Object History</h1>
+        <p>
+            Enter an ASN to show the history of the objects.
+        </p>
+        <form onsubmit="getObjects(); return false">
+            <input type="text" id="asn" pattern="(AS|As|as|aS)?[0-9]*">
+            <input type="submit" value="Show objects">
+        </form>
+        <div id="objects">
+
+        </div>
+    </div>
+
+    <script>
+        async function getObjects() {
+            let asn = document.getElementById("asn").value;
+            asn = asn.toUpperCase().replace("AS", "");
+
+            let [roas, aspas] = await Promise.all([
+                fetch("/roas?as_id=" + asn).then(response => response.json()),
+                fetch("/aspas?customer=" + asn).then(response => response.json()),
+            ]);
+
+            let content = "";
+            console.log(roas);
+            if (roas) {
+                content += "<h2>ROAs</h2>\n";
+                content += `<table border>
+                    <thead>
+                        <tr>
+                            <th>ASN</th>
+                            <th>Prefixes</th>
+                            <th>Not Before</th>
+                            <th>Not After</th>
+                            <th>First Seen</th>
+                            <th>Last Seen</th>
+                            <th>Hash</th>
+                            <th>URI</th>
+                            <th>Publication Point</th>
+                            <th>Download</th>
+                        </tr>
+                    </thead>
+                    <tbody>`;
+                for (const roa of roas) {
+                    console.log(roa);
+                    content += `<tr>
+                        <td>${roa["as_id"]}</td>
+                        <td>${roa["prefixes"].map((p) => {
+                            let c = p["prefix"];
+                            if (p["max_length"]) {
+                                c += " (max length " + p["max_length"] + ")"
+                            }
+                            return c;
+                        }).join("<br>\n")}</td>
+                        <td>${roa["not_before"]}</td>
+                        <td>${roa["not_after"]}</td>
+                        <td>${roa["visible_on"]}</td>
+                        <td>${roa["disappeared_on"]}</td>
+                        <td><small>${roa["hash"]}</small></td>
+                        <td><small>${roa["uri"]}</small></td>
+                        <td><small>${roa["publication_point"]}</small></td>
+                        <td><a download="${roa["uri"].split("/").at(-1)}" href="data:application/octet-stream;base64,${roa["content"]}">Download</a></td>
+                    </tr>`;
+                }
+                content += `</tbody></table>`;
+            }
+            document.getElementById("objects").innerHTML = content;
+        }
+    </script>
+</body>
+
+</html>

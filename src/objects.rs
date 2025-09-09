@@ -22,7 +22,6 @@ impl RpkiObject {
                 let roa = 
                     rpki::repository::roa::Roa::decode(data.clone(), true);
                 if let Ok(roa) = roa {
-                    // let roa_object = RoaObject::from(roa);
                     Some(Self::Roa(roa))
                 } else {
                     None
@@ -32,7 +31,6 @@ impl RpkiObject {
                 let aspa = 
                     rpki::repository::aspa::Aspa::decode(data.clone(), true);
                 if let Ok(aspa) = aspa {
-                    // let aspa_object = AspaObject::from(aspa);
                     Some(Self::Aspa(aspa))
                 } else {
                     None

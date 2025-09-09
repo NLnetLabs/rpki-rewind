@@ -1,10 +1,10 @@
 use std::pin::Pin;
 
+use base64::Engine;
 use chrono::NaiveDateTime;
 use futures_util::Stream;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
-use sqlx::{types::ipnet, Pool, Postgres, Transaction};
+use sqlx::{types::ipnet, Pool, Postgres, Row, Transaction};
 
 use crate::settings;
 
@@ -77,7 +77,6 @@ impl Database {
     pub async fn add_object(
         &self, 
         content: &[u8], 
-        content_json: Option<Value>, 
         visible_on: i64, 
         uri: &str, 
         hash: Option<&str>, 
@@ -87,11 +86,10 @@ impl Database {
         self.remove_objects_uri(uri, visible_on, transaction).await?;
         let res:(i32,) = sqlx::query_as::<_, (i32, )>(
             "INSERT INTO objects 
-                (content, content_json, visible_on, hash, uri, publication_point) 
-                VALUES ($1, $2, $3, $4, $5, $6)
+                (content, visible_on, hash, uri, publication_point) 
+                VALUES ($1, $2, $3, $4, $5)
                 RETURNING id")
             .bind(content)
-            .bind(content_json)
             .bind(visible_on)
             .bind(hash)
             .bind(uri)
@@ -163,23 +161,119 @@ impl Database {
         timestamp: i64
     ) -> Pin<Box<dyn Stream<Item = Result<Object, sqlx::Error>> + std::marker::Send + '_>> {
         sqlx::query_as(
-            "SELECT id, content, content_json, visible_on, 
+            "SELECT id, content, visible_on, 
             disappeared_on, hash, uri, publication_point FROM objects WHERE 
             visible_on <= $1 AND (disappeared_on >= $1 OR disappeared_on IS NULL)")
             .bind(timestamp)
             .fetch(&self.pool)
     }
 
-    pub async fn retrieve_objects_asn(
+    pub async fn retrieve_roas_asn(
         &self, 
         as_id: i64
-    ) -> Pin<Box<dyn Stream<Item = Result<Object, sqlx::Error>> + std::marker::Send + '_>> {
-        sqlx::query_as(
-            "SELECT id, content, content_json, visible_on, 
-            disappeared_on, hash, uri, publication_point FROM objects WHERE 
-            content_json @> $1")
-            .bind(json!({"as_id": as_id}))
-            .fetch(&self.pool)
+    ) -> Result<Vec<ObjectRoa>, sqlx::Error> {
+        let res = sqlx::query(
+            r#"SELECT
+                    o.id,
+                    JSON_AGG(JSON_BUILD_OBJECT(
+                        'prefix', r.prefix, 
+                        'max_length', r.max_length
+                    )) AS parsed,
+                    r.as_id,
+                    r.not_before,
+                    r.not_after,
+                    o.content,
+                    o.visible_on,
+                    o.disappeared_on,
+                    o.hash,
+                    o.uri,
+                    o.publication_point
+                FROM
+                    objects o,
+                    roas r
+                WHERE
+                    r.as_id = $1
+                    AND r.object_id = o.id
+                GROUP BY
+                    o.id,
+                    r.as_id,
+                    r.not_before,
+                    r.not_after"#)
+            .bind(as_id)
+            .fetch_all(&self.pool)
+            .await?;
+
+        let res = res.into_iter().map(|r| {
+            let parsed: Option<Vec<Roa>> = serde_json::from_value(r.get("parsed")).unwrap_or_default();
+            let content: &[u8] = r.get("content");
+            let content = base64::prelude::BASE64_STANDARD.encode(content);
+            ObjectRoa {
+                id: r.get("id"),
+                prefixes: parsed,
+                as_id: r.get("as_id"),
+                not_before: r.get("not_before"),
+                not_after: r.get("not_after"),
+                content,
+                visible_on: r.get("visible_on"),
+                disappeared_on: r.get("disappeared_on"),
+                hash: r.get("hash"),
+                uri: r.get("uri"),
+                publication_point: r.get("publication_point"),
+            }
+        }).collect();
+        Ok(res)
+    }
+
+    pub async fn retrieve_aspas_customer(
+        &self, 
+        customer: i64
+    ) -> Result<Vec<ObjectAspa>, sqlx::Error> {
+        let res = sqlx::query(
+            r#"SELECT
+                    o.id,
+                    a.customer,
+                    ARRAY_AGG(a.provider) AS providers,
+                    a.not_before,
+                    a.not_after,
+                    o.content,
+                    o.visible_on,
+                    o.disappeared_on,
+                    o.hash,
+                    o.uri,
+                    o.publication_point
+                FROM
+                    objects o,
+                    aspas a
+                WHERE
+                    a.customer = $1
+                    AND a.object_id = o.id
+                GROUP BY
+                    o.id,
+                    a.customer,
+                    a.not_before,
+                    a.not_after"#)
+            .bind(customer)
+            .fetch_all(&self.pool)
+            .await?;
+
+        let res = res.into_iter().map(|r| {
+            let content: &[u8] = r.get("content");
+            let content = base64::prelude::BASE64_STANDARD.encode(content);
+            ObjectAspa {
+                id: r.get("id"),
+                customer: r.get("customer"),
+                providers: r.get("providers"),
+                not_before: r.get("not_before"),
+                not_after: r.get("not_after"),
+                content,
+                visible_on: r.get("visible_on"),
+                disappeared_on: r.get("disappeared_on"),
+                hash: r.get("hash"),
+                uri: r.get("uri"),
+                publication_point: r.get("publication_point"),
+            }
+        }).collect();
+        Ok(res)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -233,10 +327,45 @@ impl Database {
 pub struct Object {
     pub id: i32,
     pub content: Vec<u8>,
-    pub content_json: Option<Value>,
     pub visible_on: i64,
     pub disappeared_on: Option<i64>,
-    pub hash: String,
-    pub uri: String,
-    pub publication_point: String,
+    pub hash: Option<String>,
+    pub uri: Option<String>,
+    pub publication_point: Option<String>,
+}
+
+#[derive(sqlx::FromRow, sqlx::Type, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Roa {
+    pub prefix: ipnet::IpNet,
+    pub max_length: Option<i16>,
+}
+
+#[derive(sqlx::FromRow, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ObjectRoa {
+    pub id: i32,
+    pub prefixes: Option<Vec<Roa>>,
+    pub as_id: i64,
+    pub not_before: NaiveDateTime,
+    pub not_after: NaiveDateTime,
+    pub content: String,
+    pub visible_on: i64,
+    pub disappeared_on: Option<i64>,
+    pub hash: Option<String>,
+    pub uri: Option<String>,
+    pub publication_point: Option<String>,
+}
+
+#[derive(sqlx::FromRow, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ObjectAspa {
+    pub id: i32,
+    pub customer: i64,
+    pub providers: Option<Vec<i64>>,
+    pub not_before: NaiveDateTime,
+    pub not_after: NaiveDateTime,
+    pub content: String,
+    pub visible_on: i64,
+    pub disappeared_on: Option<i64>,
+    pub hash: Option<String>,
+    pub uri: Option<String>,
+    pub publication_point: Option<String>,
 }
