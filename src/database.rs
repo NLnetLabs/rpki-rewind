@@ -224,6 +224,121 @@ impl Database {
         Ok(res)
     }
 
+    pub async fn retrieve_roas_prefix(
+        &self, 
+        prefix: ipnet::IpNet
+    ) -> Result<Vec<ObjectRoa>, sqlx::Error> {
+        let res = sqlx::query(
+            r#"SELECT
+                    o.id,
+                    JSON_AGG(JSON_BUILD_OBJECT(
+                        'prefix', r.prefix, 
+                        'max_length', r.max_length
+                    )) AS parsed,
+                    r.as_id,
+                    r.not_before,
+                    r.not_after,
+                    o.content,
+                    o.visible_on,
+                    o.disappeared_on,
+                    o.hash,
+                    o.uri,
+                    o.publication_point
+                FROM
+                    objects o,
+                    roas r
+                WHERE
+                    r.prefix <<= $1
+                    AND r.object_id = o.id
+                GROUP BY
+                    o.id,
+                    r.as_id,
+                    r.not_before,
+                    r.not_after"#)
+            .bind(prefix)
+            .fetch_all(&self.pool)
+            .await?;
+
+        let res = res.into_iter().map(|r| {
+            let parsed: Option<Vec<Roa>> = serde_json::from_value(r.get("parsed")).unwrap_or_default();
+            let content: &[u8] = r.get("content");
+            let content = base64::prelude::BASE64_STANDARD.encode(content);
+            ObjectRoa {
+                id: r.get("id"),
+                prefixes: parsed,
+                as_id: r.get("as_id"),
+                not_before: r.get("not_before"),
+                not_after: r.get("not_after"),
+                content,
+                visible_on: r.get("visible_on"),
+                disappeared_on: r.get("disappeared_on"),
+                hash: r.get("hash"),
+                uri: r.get("uri"),
+                publication_point: r.get("publication_point"),
+            }
+        }).collect();
+        Ok(res)
+    }
+
+    pub async fn retrieve_roas_asn_prefix(
+        &self, 
+        as_id: i64,
+        prefix: ipnet::IpNet
+    ) -> Result<Vec<ObjectRoa>, sqlx::Error> {
+        let res = sqlx::query(
+            r#"SELECT
+                    o.id,
+                    JSON_AGG(JSON_BUILD_OBJECT(
+                        'prefix', r.prefix, 
+                        'max_length', r.max_length
+                    )) AS parsed,
+                    r.as_id,
+                    r.not_before,
+                    r.not_after,
+                    o.content,
+                    o.visible_on,
+                    o.disappeared_on,
+                    o.hash,
+                    o.uri,
+                    o.publication_point
+                FROM
+                    objects o,
+                    roas r
+                WHERE
+                    r.as_id = $1
+                    AND r.prefix <<= $2
+                    AND r.object_id = o.id
+                GROUP BY
+                    o.id,
+                    r.as_id,
+                    r.not_before,
+                    r.not_after"#)
+            .bind(as_id)
+            .bind(prefix)
+            .fetch_all(&self.pool)
+            .await?;
+
+        let res = res.into_iter().map(|r| {
+            let parsed: Option<Vec<Roa>> = serde_json::from_value(r.get("parsed")).unwrap_or_default();
+            let content: &[u8] = r.get("content");
+            let content = base64::prelude::BASE64_STANDARD.encode(content);
+            ObjectRoa {
+                id: r.get("id"),
+                prefixes: parsed,
+                as_id: r.get("as_id"),
+                not_before: r.get("not_before"),
+                not_after: r.get("not_after"),
+                content,
+                visible_on: r.get("visible_on"),
+                disappeared_on: r.get("disappeared_on"),
+                hash: r.get("hash"),
+                uri: r.get("uri"),
+                publication_point: r.get("publication_point"),
+            }
+        }).collect();
+        Ok(res)
+    }
+
     pub async fn retrieve_aspas_customer(
         &self, 
         customer: i64
@@ -334,13 +449,13 @@ pub struct Object {
     pub publication_point: Option<String>,
 }
 
-#[derive(sqlx::FromRow, sqlx::Type, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(sqlx::FromRow, sqlx::Type, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub struct Roa {
     pub prefix: ipnet::IpNet,
     pub max_length: Option<i16>,
 }
 
-#[derive(sqlx::FromRow, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(sqlx::FromRow, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub struct ObjectRoa {
     pub id: i32,
     pub prefixes: Option<Vec<Roa>>,
