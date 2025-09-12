@@ -260,6 +260,7 @@ impl Runner {
                 let url = url.clone();
                 let notification = notification.clone();
                 let time = chrono::Utc::now().timestamp_millis();
+
                 let _ = Self::retrieve_rrdp(
                     database,
                     client,
@@ -337,7 +338,12 @@ impl Runner {
         notification: Arc<RwLock<Option<NotificationFile>>>,
         time: i64,
     ) -> Result<(), Box<dyn Error>> {
-        let output = settings::DOWNLOAD_FOLDER.to_string();
+        // let output = settings::DOWNLOAD_FOLDER.to_string();
+        let output_dir = Arc::new(
+            tempfile::TempDir::with_prefix("rewind-rrdp-")
+            .expect("Cannot create temporary folder")
+        );
+        let output = output_dir.clone().path().to_string_lossy().to_string();
 
         Self::download(&client, &time.to_string(), &url, &output).await?;
 
@@ -550,8 +556,10 @@ impl Runner {
         let database = self.database.clone();
         let state = self.rsync_state.clone();
 
-        let dir = Arc::new(tempfile::TempDir::with_prefix("rewind-")
-            .expect("Cannot create temporary directory"));
+        let dir = Arc::new(
+            tempfile::TempDir::with_prefix("rewind-rsync-")
+            .expect("Cannot create temporary directory")
+        );
         
         let stop: Arc<Mutex<bool>> = self.stop.clone();
         tokio::spawn(async move {

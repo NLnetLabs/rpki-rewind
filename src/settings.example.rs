@@ -1,6 +1,6 @@
 pub const ROUTINATOR_URL: &str = "https://routinator.nlnetlabs.nl/api/v1/status";
 pub const USER_AGENT: &str = "NLnet Labs RPKI-Rewind";
-pub const DOWNLOAD_FOLDER: &str = "/tmp/rpki-rewind/";
+// pub const DOWNLOAD_FOLDER: &str = "/tmp/rpki-rewind/";
 
 /// Update frequency for the RRDP endpoints in seconds
 pub const UPDATE_RRDP: u32 = 600;
