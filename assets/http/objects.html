@@ -5,9 +5,22 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>RPKI Rewind objects</title>
+    <script type="text/javascript"
+        src="https://unpkg.com/vis-timeline@latest/standalone/umd/vis-timeline-graph2d.min.js"></script>
+    <link href="https://unpkg.com/vis-timeline@latest/styles/vis-timeline-graph2d.min.css" rel="stylesheet"
+        type="text/css" />
     <style>
         body {
             font-family: system-ui, sans-serif;
+        }
+
+        #objects > table {
+            width: 100%;
+        }
+
+        #visualization {
+            width: 600px;
+            height: 400px;
         }
     </style>
 </head>
@@ -22,7 +35,8 @@
             <input type="text" id="asn" pattern="(AS|As|as|aS)?[0-9]*">
             <input type="submit" value="Show objects">
         </form>
-        <div id="objects">
+        <div id="vis"></div>
+        <div id="objects" class="container">
 
         </div>
     </div>
@@ -37,49 +51,98 @@
                 fetch("/aspas?customer=" + asn).then(response => response.json()),
             ]);
 
+            let visItems = [];
+
             let content = "";
             if (roas) {
                 content += "<h2>ROAs</h2>\n";
-                content += `<table border>
-                    <thead>
-                        <tr>
-                            <th>ASN</th>
-                            <th>Prefixes</th>
-                            <th>Not Before</th>
-                            <th>Not After</th>
-                            <th>First Seen</th>
-                            <th>Last Seen</th>
-                            <th>Hash</th>
-                            <th>URI</th>
-                            <th>Publication Point</th>
-                            <th>Download</th>
-                        </tr>
-                    </thead>
-                    <tbody>`;
                 for (const roa of roas) {
-                    console.log(roa);
-                    content += `<tr>
-                        <td>${roa["as_id"]}</td>
-                        <td>${roa["prefixes"].map((p) => {
-                            let c = p["prefix"];
-                            if (p["max_length"]) {
-                                c += " (max length " + p["max_length"] + ")"
-                            }
-                            return c;
-                        }).join("<br>\n")}</td>
-                        <td>${roa["not_before"]}</td>
-                        <td>${roa["not_after"]}</td>
-                        <td>${roa["visible_on"]}</td>
-                        <td>${roa["disappeared_on"]}</td>
-                        <td><small>${roa["hash"]}</small></td>
-                        <td><small>${roa["uri"]}</small></td>
-                        <td><small>${roa["publication_point"]}</small></td>
-                        <td><a download="${roa["uri"].split("/").at(-1)}" href="data:application/octet-stream;base64,${roa["content"]}">Download</a></td>
-                    </tr>`;
+                    const prefixes = roa["prefixes"].map((p) => {
+                        let c = p["prefix"];
+                        if (p["max_length"]) {
+                            c += "-" + p["max_length"]
+                        }
+                        return c;
+                    }).join("<br>\n");
+                    const roaContent = `
+                    <table border id="roa-${roa["id"]}">
+                        <tr>
+                            <td><strong>ID</strong></td>
+                            <td>${roa["id"]}</td>
+                        </tr>
+                        <tr>
+                            <td><strong>ASN</strong></td>
+                            <td>${roa["as_id"]}</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Prefixes</strong></td>
+                            <td>${prefixes}</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Not Before</strong></td>
+                            <td>${roa["not_before"]}</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Not After</strong></td>
+                            <td>${roa["not_after"]}</td>
+                        </tr>
+                        <tr>
+                            <td><strong>First Seen</strong></td>
+                            <td>${new Date(roa["visible_on"]).toISOString()}</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Disappeared On</strong></td>
+                            <td>${roa["disappeared_on"] ? new Date(roa["disappeared_on"]).toISOString() : "never"}</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Hash</strong></td>
+                            <td>${roa["hash"]}</td>
+                        </tr>
+                        <tr>
+                            <td><strong>URI</strong></td>
+                            <td>${roa["uri"]}</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Publication Point</strong></td>
+                            <td>${roa["publication_point"]}</td>
+                        </tr>
+                        <tr>
+                            <td colspan="2">
+                                <a download="${roa["uri"].split("/").at(-1)}" href="data:application/octet-stream;base64,${roa["content"]}">Download</a></td>
+                        </tr>
+                    </table><br>
+                    `;
+
+                    visItems.push({
+                        id: roa["id"],
+                        content: `<strong>AS${roa["as_id"]}</strong><br>${prefixes}`,
+                        start: new Date(roa["visible_on"]),
+                        end: roa["disappeared_on"] ? new Date(roa["disappeared_on"]) : new Date(),
+                        roaContent: roaContent
+                    });
+
+                    content += roaContent;
                 }
-                content += `</tbody></table>`;
             }
-            document.getElementById("objects").innerHTML = content;
+            visItems = new vis.DataSet(visItems);
+            const visContainer = document.getElementById("vis");
+            visContainer.innerHTML = "";
+            const timeline = new vis.Timeline(
+                visContainer, 
+                visItems, 
+                {
+                    clickToUse: true
+                }
+            );
+            timeline.on("click", (properties) => {  
+                if(properties.item){
+                    const item = visItems.get(properties.item);
+                    var win = window.open("", "Title", "toolbar=no,location=no,directories=no,status=no,menubar=no,scrollbars=yes,resizable=yes,width=780,height=500");
+                    win.document.body.innerHTML = item.roaContent;
+                    // window.location.hash = "roa-" + item.id;
+                }
+            });
+            // document.getElementById("objects").innerHTML = content;
         }
     </script>
 </body>

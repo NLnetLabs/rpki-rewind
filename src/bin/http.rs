@@ -19,6 +19,7 @@ async fn main() {
     let app = Router::new()
         .route("/", get(index))
         .route("/objects.html", get(objects))
+        .route("/feed.rss", get(feed))
         .route("/wayback", post(wayback))
         .route("/roas", get(roas))
         .route("/aspas", get(aspas));
@@ -72,6 +73,39 @@ async fn roas(
         }
     };
 
+    Ok(Json(objects))
+}
+
+async fn feed(
+    Form(form): Form<RoasRequest>
+) -> impl IntoResponse {
+    if let Some(pfx) = form.prefix {
+        if pfx.prefix_len() < 8 {
+            // If you requested 0.0.0.0/0 you'd make the server crash
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    }
+
+    let database = Database::new().await;
+    let objects = match (form.as_id, form.prefix) {
+        (Some(as_id), Some(prefix)) => 
+            database.retrieve_roas_asn_prefix(as_id.into(), prefix).await,
+        (Some(as_id), _) => 
+            database.retrieve_roas_asn(as_id.into()).await,
+        (_, Some(prefix)) => 
+            database.retrieve_roas_prefix(prefix).await,
+        _ => 
+            return Err(StatusCode::BAD_REQUEST)
+    };
+    let objects = match objects {
+        Ok(objs) => objs,
+        Err(e) => {
+            println!("{}", e);
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    };
+
+    // TODO: Output RSS/Atom feed
     Ok(Json(objects))
 }
 
