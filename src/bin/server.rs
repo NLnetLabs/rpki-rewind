@@ -113,6 +113,7 @@ impl App {
     async fn fetch_urls() -> Result<Vec<String>, FetchError> {
         let client = reqwest::Client::builder()
             .user_agent(settings::USER_AGENT)
+            .gzip(true)
             .build()?;
         let resp = client.get(settings::ROUTINATOR_URL).send().await?;
         let value = resp.json::<serde_json::Value>().await?;

@@ -1,10 +1,11 @@
-use std::pin::Pin;
+use std::{pin::Pin, time::Duration};
 
 use base64::Engine;
 use chrono::NaiveDateTime;
 use futures_util::Stream;
+use log::LevelFilter;
 use serde::{Deserialize, Serialize};
-use sqlx::{types::ipnet, Pool, Postgres, Row, Transaction};
+use sqlx::{postgres::PgConnectOptions, types::ipnet, ConnectOptions, Pool, Postgres, Row, Transaction};
 
 use crate::settings;
 
@@ -16,15 +17,19 @@ pub struct Database {
 
 impl Database {
     pub async fn new() -> Self {
-        let pool = sqlx::postgres::PgPoolOptions::new()
-            .max_connections(settings::DB_POOL)
-            .connect(format!(
+        let mut options: PgConnectOptions = format!(
                 "postgres://{}:{}@{}/{}",
                 settings::DB_USER,
                 settings::DB_PASS,
                 settings::DB_HOST,
                 settings::DB_NAME
-            ).as_str())
+            ).parse().expect("invalid database options");
+
+        options = options.log_slow_statements(LevelFilter::Warn, Duration::from_secs(10));
+
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(settings::DB_POOL)
+            .connect_with(options)
             .await.expect("could not connect to database");
         Database {
             pool

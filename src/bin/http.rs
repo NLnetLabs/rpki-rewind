@@ -47,11 +47,9 @@ pub struct RoasRequest {
 async fn roas(
     Form(form): Form<RoasRequest>
 ) -> impl IntoResponse {
-    if let Some(pfx) = form.prefix {
-        if pfx.prefix_len() < 8 {
-            // If you requested 0.0.0.0/0 you'd make the server crash
-            return Err(StatusCode::BAD_REQUEST);
-        }
+    if let Some(pfx) = form.prefix && pfx.prefix_len() < 8 {
+        // If you requested 0.0.0.0/0 you'd make the server crash
+        return Err(StatusCode::BAD_REQUEST);
     }
 
     let database = Database::new().await;
@@ -79,11 +77,9 @@ async fn roas(
 async fn feed(
     Form(form): Form<RoasRequest>
 ) -> impl IntoResponse {
-    if let Some(pfx) = form.prefix {
-        if pfx.prefix_len() < 8 {
-            // If you requested 0.0.0.0/0 you'd make the server crash
-            return Err(StatusCode::BAD_REQUEST);
-        }
+    if let Some(pfx) = form.prefix && pfx.prefix_len() < 8 {
+        // If you requested 0.0.0.0/0 you'd make the server crash
+        return Err(StatusCode::BAD_REQUEST);
     }
 
     let database = Database::new().await;
