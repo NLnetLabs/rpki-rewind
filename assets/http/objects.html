@@ -131,7 +131,14 @@
                 visContainer, 
                 visItems, 
                 {
-                    clickToUse: true
+                    locale: "en",
+                    clickToUse: false,
+                    zoomKey: "ctrlKey",
+                    order: (a, b) => {
+                        if (a < b) return -1;
+                        if (a > b) return 1;
+                        return 0;
+                    },
                 }
             );
             timeline.on("click", (properties) => {  
